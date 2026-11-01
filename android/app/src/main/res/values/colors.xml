@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="glasssign_oled">#04060D</color>
+    <color name="glasssign_icon_bg">#0A1020</color>
+    <color name="glasssign_cyan">#7FE3FF</color>
+    <color name="glasssign_lilac">#C0AEFF</color>
+</resources>

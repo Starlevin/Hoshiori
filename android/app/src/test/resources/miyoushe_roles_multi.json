@@ -1,0 +1,11 @@
+{
+  "retcode": 0,
+  "message": "OK",
+  "data": {
+    "list": [
+      {"game_uid": "100000001", "region": "cn_gf01", "nickname": "角色甲"},
+      {"game_uid": "100000002", "region": "cn_gf01", "nickname": "角色乙"},
+      {"game_uid": "100000001", "region": "cn_gf01", "nickname": "角色甲"}
+    ]
+  }
+}

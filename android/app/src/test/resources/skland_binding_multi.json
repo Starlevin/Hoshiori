@@ -1,0 +1,23 @@
+{
+  "code": 0,
+  "message": "OK",
+  "data": {
+    "list": [
+      {
+        "appCode": "arknights",
+        "bindingList": [
+          {"uid": "20000001", "channelMasterId": "1", "nickName": "博士"}
+        ]
+      },
+      {
+        "appCode": "endfield",
+        "bindingList": [
+          {"roles": [
+            {"roleId": "30000001", "serverId": "40000001", "nickname": "管理员甲"},
+            {"roleId": "30000002", "serverId": "40000002", "nickname": "管理员乙"}
+          ]}
+        ]
+      }
+    ]
+  }
+}
