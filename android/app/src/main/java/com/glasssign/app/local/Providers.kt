@@ -74,8 +74,8 @@ class SklandAdapter(private val http:Transport) : ProviderAdapter {
         required(c,"cred","signToken","dId")
         val time=((System.currentTimeMillis()/1000)+c.optLong("timeOffsetSeconds")).toString()
         val ctx=linkedMapOf("platform" to if(endfield)"3" else "1","timestamp" to time,"dId" to c.getString("dId"),"vName" to if(endfield)"1.0.0" else "1.5.1")
-        // JSONObject(Map) does not guarantee insertion order: signing context is explicitly serialized.
-        val context=ctx.entries.joinToString(",","{","}"){JSONObject.quote(it.key)+":"+JSONObject.quote(it.value)}
+        // Fixed order and web-compatible escaping are both required by the signature.
+        val context=Signing.sklandContext(ctx.getValue("platform"),time,c.getString("dId"),ctx.getValue("vName"))
         val text=body?.toString().orEmpty()
         val headers=ctx+mapOf("cred" to c.getString("cred"),"sign" to Signing.skland("/api/v1$path",text,time,context,c.getString("signToken")),"User-Agent" to "Skland/1.5.1 (com.hypergryph.skland; build:100501001; Android 34; ) Okhttp/4.11.0","X-Requested-With" to "com.hypergryph.skland")+extra
         return http.call(if(get)"GET" else "POST",base+path,headers,body=text)

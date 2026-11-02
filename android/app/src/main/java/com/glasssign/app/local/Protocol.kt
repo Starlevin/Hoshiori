@@ -43,6 +43,12 @@ object Signing {
     fun md5(s: String) = MessageDigest.getInstance("MD5").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
     fun mys(t: String, r: String) = "$t,$r," + md5("salt=d9200c846b10886e8c874fc33c8f308b&t=$t&r=$r")
     fun tagged(t: String, r: String) = "$t,$r," + md5("${t}${r}1.2.5pUds3dfMkl")
+    /** Match web JSON.stringify: Android JSONObject.quote unnecessarily escapes forward slashes. */
+    fun sklandContext(platform: String, time: String, deviceId: String, version: String): String =
+        linkedMapOf("platform" to platform, "timestamp" to time, "dId" to deviceId, "vName" to version)
+            .entries.joinToString(",", "{", "}") {
+                JSONObject.quote(it.key) + ":" + JSONObject.quote(it.value).replace("\\/", "/")
+            }
     fun skland(path: String, body: String, time: String, context: String, token: String): String {
         val mac = Mac.getInstance("HmacSHA256"); mac.init(SecretKeySpec(token.toByteArray(), "HmacSHA256"))
         val hex = mac.doFinal((path + body + time + context).toByteArray()).joinToString("") { "%02x".format(it) }

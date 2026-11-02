@@ -58,6 +58,16 @@ class ProviderTest {
         val context="""{"platform":"3","timestamp":"$time","dId":"fixture-d","vName":"1.0.0"}"""
         assertEquals(Signing.skland("/api/v1/game/endfield/attendance","",time,context,"fixture-s"),call.headers["sign"])
     }
+    @Test fun sklandBindingSignsSlashDeviceIdLikeTheWebSdk() {
+        val http=Fake { fixture("skland_binding_multi.json") }
+        val credentials=JSONObject().put("cred","fixture-c").put("signToken","sign-token").put("dId","device/a+b==")
+        SklandAdapter(http).targets(credentials){}
+        val call=http.calls.single()
+        val time=call.headers.getValue("timestamp")
+        val context="""{"platform":"1","timestamp":"$time","dId":"device/a+b==","vName":"1.5.1"}"""
+        assertEquals(Signing.skland("/api/v1/game/player/binding","",time,context,"sign-token"),call.headers["sign"])
+        assertEquals("device/a+b==",call.headers["dId"])
+    }
     @Test fun taggedRefreshAndAlreadyAvoidsPost() {
         val h=Fake {when {it.url.endsWith("refreshToken")->JSONObject("""{"code":0,"data":{"accessToken":"fixture-a","refreshToken":"fixture-rotated","uid":"9"}}""");it.url.endsWith("getGameRoles")->fixture("tagged_roles.json");it.url.endsWith("signin/state")->fixture("tagged_state_signed.json");else->error("Unexpected request")}}
         val c=JSONObject("""{"refreshToken":"fixture-old","deviceId":"fixture-d","communityCheckin":false}""");val a=TaggedAdapter(h);var saved=false
