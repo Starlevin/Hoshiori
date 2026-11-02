@@ -55,10 +55,42 @@ object Signing {
 interface Transport {
     fun call(method: String, url: String, headers: Map<String,String> = emptyMap(), query: Map<String,String> = emptyMap(), body: String? = null, form: Map<String,String>? = null): JSONObject
 }
+/**
+ * Bounded, secret-free description of a rejected request: method, host and HTTP status only.
+ * Response bodies, query strings, headers and tokens are deliberately never included, so this
+ * value is safe to place in a stored record and show to the account owner.
+ */
+data class HttpRejection(val method:String,val host:String,val code:Int) { fun describe()="$method $host · HTTP $code" }
+/**
+ * Classifies a non-2xx reply into the single [SignError] the engine records. Pure so every branch is
+ * testable without a socket. A 2xx reply is never passed here: its JSON body keeps the original
+ * business handling in the adapters.
+ */
+fun classifyStatus(method:String,host:String,code:Int):SignError {
+    val detail="（" + HttpRejection(method,host,code).describe() + "）"
+    return if (code in 300..399) SignError("protocol", "社区发生跳转，已停止请求保护凭据")
+    else if (code == 401) SignError("auth", "授权失效，请重新导入")
+    else if (code == 403 || code == 412) SignError("captcha", "需要在官方应用完成人机验证")
+    else if (code == 429) SignError("rate_limit", "请求受限，请稍后核对")
+    else if (code in 500..599) SignError(if (method == "POST") "uncertain" else "network", if (method == "POST") "提交结果未确认，请先在官方应用核对$detail" else "社区暂不可用，等待网络恢复后重试$detail")
+    else SignError("protocol", "社区接口状态异常$detail")
+}
+/**
+ * Renders the transport's own explanation of an HTTP-level rejection as a bracketed suffix, or
+ * nothing when the transport cannot explain itself (for example a synthetic test transport).
+ * Only method/host/status can appear here by construction, never credential material.
+ */
+fun rejectionDetail(transport: Transport): String = when(transport) {
+    is OfficialTransport -> transport.lastRejection()?.let{"（" + it.describe() + "）"}.orEmpty()
+    else -> ""
+}
 class OfficialTransport : Transport {
     private val hosts = setOf("api-takumi.mihoyo.com", "act-nap-api.mihoyo.com", "zonai.skland.com", "bbs-api.tajiduo.com", "api.kurobbs.com", "user.laohu.com")
     private val client = OkHttpClient.Builder().proxy(Proxy.NO_PROXY).followRedirects(false).followSslRedirects(false)
         .retryOnConnectionFailure(false).connectTimeout(5, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS).callTimeout(30, TimeUnit.SECONDS).build()
+    @Volatile private var rejection: HttpRejection? = null
+    /** Status of the reply currently being classified; null once a 2xx body is being returned. */
+    internal fun lastRejection(): HttpRejection? = rejection
     override fun call(method: String, url: String, headers: Map<String,String>, query: Map<String,String>, body: String?, form: Map<String,String>?): JSONObject {
         val parsed = url.toHttpUrl()
         if (parsed.scheme != "https" || parsed.host !in hosts || parsed.port != 443 || parsed.username.isNotEmpty() || parsed.password.isNotEmpty()) throw SignError("protocol", "已拒绝非官方 HTTPS 地址")
@@ -67,14 +99,9 @@ class OfficialTransport : Transport {
         try {
             val request = Request.Builder().url(endpoint).apply { headers.forEach { (k,v) -> header(k,v) } }.method(method, if (method == "GET") null else payload).build()
             client.newCall(request).execute().use { reply ->
-                when (reply.code) {
-                    in 300..399 -> throw SignError("protocol", "社区发生跳转，已停止请求保护凭据")
-                    401 -> throw SignError("auth", "授权失效，请重新导入")
-                    403,412 -> throw SignError("captcha", "需要在官方应用完成人机验证")
-                    429 -> throw SignError("rate_limit", "请求受限，请稍后核对")
-                    in 500..599 -> throw SignError(if (method == "POST") "uncertain" else "network", if (method == "POST") "提交结果未确认，请先在官方应用核对" else "社区暂不可用，等待网络恢复后重试")
-                    !in 200..299 -> throw SignError("protocol", "社区接口状态异常")
-                }
+                // A 2xx body keeps the original business handling; only a non-2xx reply is classified.
+                rejection = if (reply.code in 200..299) null else HttpRejection(method, parsed.host, reply.code)
+                if (reply.code !in 200..299) throw classifyStatus(method, parsed.host, reply.code)
                 val source = reply.body?.source() ?: throw SignError(if(method=="POST")"uncertain" else "protocol", "社区返回空响应，结果待核对")
                 if (source.request(2L * 1024 * 1024 + 1)) throw SignError(if(method=="POST")"uncertain" else "protocol", "社区响应过大，结果待核对")
                 return try { JSONObject(source.readUtf8()) } catch (_: Exception) { throw SignError(if(method=="POST")"uncertain" else "protocol", "社区响应格式异常，结果待核对") }

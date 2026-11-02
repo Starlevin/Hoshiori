@@ -129,20 +129,24 @@ class TaggedAdapter(private val http:Transport) : ProviderAdapter {
     }
     override fun targets(c:JSONObject,persist:()->Unit):List<SignTarget> {
         val token=token(c,persist);val items=mutableListOf<SignTarget>()
+        val transport=http
         if(c.optBoolean("communityCheckin",true))items.add(SignTarget("community|1","塔吉多 · 社区签到"))
         for(gid in c.strings("gameIds",listOf(c.optString("gameId","1289")))) {
             if(!gid.all{it.isDigit()} || gid.isBlank())continue
             val configured=c.strings("roleIds",emptyList())
             val roles=if(configured.isNotEmpty())configured.map{it to it} else {
-                val r=http.call("GET",base+"/usercenter/api/v2/getGameRoles",headers(c,token),query=mapOf("gameId" to gid))
+                val r=transport.call("GET",base+"/usercenter/api/v2/getGameRoles",headers(c,token),query=mapOf("gameId" to gid))
                 if(r.optString("code")!="0") {
                     val code=r.optString("code").takeIf{it.matches(Regex("[A-Za-z0-9_-]{1,12}"))} ?: "unknown"
-                    throw SignError(when(code){"401","402"->"auth";"403"->"captcha";else->"protocol"},"塔吉多角色查询未完成（$code），请检查授权或官方绑定状态")
+                    // Only method/host/status: a rejected request stays attributable without echoing a body or token.
+                    throw SignError(when(code){"401","402"->"auth";"403"->"captcha";else->"protocol"},"塔吉多角色查询未完成（$code）"+rejectionDetail(transport)+"，请检查授权或官方绑定状态")
                 }
                 val d=r.optJSONObject("data");(d?.rows("roles").orEmpty().ifEmpty{d?.rows("list").orEmpty()}).map{it.optString("roleId") to it.optString("roleName",it.optString("nickname"))}
             }
-            roles.filter{it.first.isNotBlank()}.forEach{(id,name)->items.add(SignTarget("game|$gid|$id","异环 · $name"))}
+            // A role without a nickname stays selectable: dropping it would hide a real role instead of only labelling it.
+            roles.filter{it.first.isNotBlank()}.forEach{(id,name)->items.add(SignTarget("game|$gid|$id",if(name.isBlank())"异环 · $id" else "异环 · $name"))}
         }
+        // A bare fallback target carries no game, so discovery must not report a failure the engine cannot attribute.
         if(items.none{it.id.startsWith("game|")})items.add(SignTarget("no-roles","塔吉多游戏角色"))
         return items.distinctBy{it.id}
     }

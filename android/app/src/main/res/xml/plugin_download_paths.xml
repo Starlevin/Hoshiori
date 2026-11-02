@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider paths for the optional plugin page (领签 LingQian).
+
+  ONLY `cache/plugins/` is exposed. Deliberately absent:
+    <files-path>     — would expose every file this app writes (accounts, records, snapshots).
+    <root-path>      — would expose /, including the app's private database and keystore-backed data.
+    <external-path>  — the plugin artifact has no reason to ever leave internal storage.
+
+  The URI produced here is handed to the system installer with FLAG_GRANT_READ_URI_PERMISSION, so the
+  grant is per-Intent and temporary; no other app can read the cache directory.
+-->
+<paths>
+    <cache-path
+        name="plugins"
+        path="plugins/" />
+</paths>

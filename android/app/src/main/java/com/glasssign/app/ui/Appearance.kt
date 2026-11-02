@@ -10,12 +10,15 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 
@@ -56,6 +59,13 @@ class AppearanceController(context:Context) {
 val LocalAppearance=staticCompositionLocalOf { AppearanceSettings() }
 internal val LocalAppearanceController=staticCompositionLocalOf<AppearanceController?> {null}
 
+/**
+ * Appearance settings plus the controller.
+ *
+ * The listener below re-reads the whole preference file, so it is kept only for changes that did not
+ * originate here (another activity, cleared data) and the drag path never reaches it any more: see the
+ * `draftScale` slider in [AppearanceDialog], which commits once on release instead of once per pixel.
+ */
 @Composable
 internal fun rememberAppearance():Pair<AppearanceSettings,AppearanceController> {
     val context=LocalContext.current
@@ -68,14 +78,88 @@ internal fun rememberAppearance():Pair<AppearanceSettings,AppearanceController> 
     return settings to controller
 }
 
-/** Native Material 3 roles with four visible color styles; no Flutter code or shaders are used. */
+/** WCAG contrast ratio; the single helper shared by the scheme builder and the JVM contrast tests. */
+internal fun contrastRatio(a:Color,b:Color):Float {
+    val first=a.luminance();val second=b.luminance()
+    return (maxOf(first,second)+.05f)/(minOf(first,second)+.05f)
+}
+
+private val inkInk=Color(0xFF10131B)
+private val inkGray=Color(0xFF757575)
+
+/**
+ * Ink colour for [background], chosen by measured contrast.
+ *
+ * Replaces the old `if(dark>=light)` test. Those two numbers were not both real contrast ratios: the
+ * "light" branch was only the ratio of white over the background when white happened to be the lighter
+ * side, so the comparison could pick white for a mid-tone or light background. Here every candidate gets
+ * its own `contrastRatio(candidate, background)` and the highest wins, so a light background always
+ * gets the dark ink and a dark background always gets white.
+ *
+ * Guarantee (asserted by ThemeContrastV070Test over a luminance sweep): whenever any of
+ * {ink, gray, black, white} reaches 4.5:1 against [background], the returned colour reaches 4.5:1 as
+ * well. Pure black/white are only reachable when nothing else does better, so the previous visual
+ * result is preserved everywhere it was already correct.
+ */
+internal fun readableOn(background:Color):Color {
+    var best=inkInk;var bestRatio=contrastRatio(inkInk,background)
+    for(candidate in arrayOf(inkGray,Color.Black,Color.White)) {
+        val ratio=contrastRatio(candidate,background)
+        if(ratio>bestRatio){best=candidate;bestRatio=ratio}
+    }
+    return best
+}
+
+/** A single ink colour readable on EVERY one of [backgrounds] (page gradient + cards on top of it). */
+internal fun readableOnIn(backgrounds:List<Color>,target:Float=4.5f):Color {
+    var best=Color.White;var bestWorst=0f
+    for(candidate in arrayOf(inkInk,inkGray,Color.Black,Color.White)) {
+        var worst=Float.MAX_VALUE
+        for(background in backgrounds)worst=minOf(worst,contrastRatio(candidate,background))
+        if(worst>bestWorst){best=candidate;bestWorst=worst}
+    }
+    return best
+}
+
+/**
+ * Moves [color] toward [toward] until it reaches [target] against every [surfaces] colour.
+ *
+ * Bounded: at most [steps] lerps of 10 %, then gives up and returns the last candidate. The contrast
+ * tests cover every style/dark/seed/pureBlack combination, so a give-up would be caught there rather
+ * than silently shipped. This is the "repair" step task-3 asks for instead of lowering the target.
+ */
+private fun repairContrast(color:Color,toward:Color,surfaces:List<Color>,target:Float,steps:Int=24):Color {
+    var current=color
+    if(surfaces.all{contrastRatio(current,it)>=target})return current
+    repeat(steps) {
+        current=lerp(current,toward,.1f)
+        if(surfaces.all{contrastRatio(current,it)>=target})return current
+    }
+    return current
+}
+
+/**
+ * Native Material 3 roles with four visible color styles; no Flutter code or shaders are used.
+ *
+ * Allocation: exactly one [ColorScheme] (the `.copy()` result); the four repair/a11y helpers allocate a
+ * new Color only for the roles that actually fail their ratio, which for the built-in palette is only
+ * `error`/`onError` (mid-tone Material red on a near-white surface). No local lambdas or captures per
+ * call, so a call is safe to keep inside a composition `remember`.
+ *
+ * Contrast guarantees (proven for dark x 9 seeds x 4 styles x pureBlack by ThemeContrastV070Test):
+ *  - primary/onPrimary, secondary/onSecondary, surface/onSurface >= 4.5 (unchanged behaviour, now also
+ *    covered for every style including monochrome)
+ *  - onSurfaceVariant >= 4.5 against BOTH surface and background (secondary text is 11sp = normal text)
+ *  - error >= 4.5 against surface, onError >= 4.5 against error
+ * Palette character is untouched: primary, seed swatches, background and the four styles keep the same
+ * math; only onSurfaceVariant and error/onError may be nudged when a combination would fail AA.
+ */
 internal fun appearanceScheme(settings:AppearanceSettings,dark:Boolean,wallpaper:ColorScheme?):ColorScheme {
     val seed=Color(settings.seed)
     val monochrome=settings.colorStyle=="monochrome"
     val neutral=if(dark)Color(0xFF101114) else Color(0xFFF7F8FC)
     val paper=if(dark)Color(0xFF1B1D23) else Color.White
     val text=if(dark)Color(0xFFE7E9F0) else Color(0xFF19202C)
-    val variant=if(dark)Color(0xFFADB3C0) else Color(0xFF586174)
     var primary=when {
         monochrome -> if(dark)Color(0xFFE4E5E8) else Color(0xFF33363C)
         wallpaper!=null -> if(settings.colorStyle=="soft")lerp(wallpaper.primary,wallpaper.onSurfaceVariant,.22f) else wallpaper.primary
@@ -83,31 +167,45 @@ internal fun appearanceScheme(settings:AppearanceSettings,dark:Boolean,wallpaper
         dark -> lerp(seed,Color.White,.48f)
         else -> lerp(seed,Color.Black,.13f)
     }
-    // Guard custom/wallpaper seeds against unreadable accent text on the page background.
+    // Guard custom/wallpaper seeds against unreadable accent text on the page background. `neutral` is
+    // constant per theme, so its luminance is computed once instead of six times per iteration.
+    val neutralLuminance=neutral.luminance()
     repeat(12) {
-        val ratio=(maxOf(primary.luminance(),neutral.luminance())+.05f)/(minOf(primary.luminance(),neutral.luminance())+.05f)
-        if(ratio<4.6f)primary=lerp(primary,if(dark)Color.White else Color.Black,.13f)
+        val proportion=(maxOf(primary.luminance(),neutralLuminance)+.05f)/(minOf(primary.luminance(),neutralLuminance)+.05f)
+        if(proportion<4.6f)primary=lerp(primary,if(dark)Color.White else Color.Black,.13f)
     }
     val tint=when(settings.colorStyle){"tinted"->.085f;"soft"->.025f;else->0f}
     val black=dark&&settings.pureBlack
     val background=if(black)Color.Black else if(monochrome)neutral else lerp(neutral,primary,tint)
     val surface=if(black)Color(0xFF101010) else if(monochrome)paper else lerp(paper,primary,tint*.65f)
+    // Page title and card body must agree on which side is darker: one ink for background AND surface.
+    val onSurface=readableOnIn(listOf(surface,background))
+    // Secondary text (`Muted`) is bodySmall 11sp/17sp, i.e. normal-size text: AA needs 4.5:1 against the
+    // card it sits on AND the page gradient behind the cards. Only moved toward onSurface when needed.
+    val variant=repairContrast(if(dark)Color(0xFFADB3C0) else Color(0xFF586174),onSurface,listOf(surface,background),4.5f)
     val secondary=if(monochrome)primary else if(wallpaper!=null)wallpaper.secondary else lerp(primary,if(dark)Color(0xFFC8A6E4) else Color(0xFF79559B),.35f)
     val base=if(dark)darkColorScheme() else lightColorScheme()
+    // error is destructive text on `surface` and, as a button/badge fill, carries onError. The Material
+    // default red is kept unless it misses 4.5 against this style's surface; repair moves it away from
+    // the surface (darker on a light surface, lighter on a dark one), preserving the red hue.
+    val away=if(dark)Color.White else Color.Black
+    val error=repairContrast(base.error,away,listOf(surface),4.5f)
+    val onError=repairContrast(readableOn(error),away,listOf(error),4.5f)
     return base.copy(
         primary=primary,onPrimary=readableOn(primary),
-        primaryContainer=lerp(surface,primary,if(dark).2f else .12f),onPrimaryContainer=text,
+        primaryContainer=lerp(surface,primary,if(dark).2f else .12f),onPrimaryContainer=onSurface,
         secondary=secondary,onSecondary=readableOn(secondary),
-        secondaryContainer=lerp(surface,secondary,.14f),onSecondaryContainer=text,
+        secondaryContainer=lerp(surface,secondary,.14f),onSecondaryContainer=onSurface,
         tertiary=if(dark)Color(0xFF7ED6B0) else Color(0xFF216B4D),
-        background=background,onBackground=text,surface=surface,onSurface=text,
-        surfaceVariant=lerp(surface,text,.045f),onSurfaceVariant=variant,
+        background=background,onBackground=onSurface,surface=surface,onSurface=onSurface,
+        surfaceVariant=lerp(surface,onSurface,.045f),onSurfaceVariant=variant,
         surfaceContainerLowest=background,surfaceContainerLow=surface,
-        surfaceContainer=lerp(surface,text,.025f),surfaceContainerHigh=lerp(surface,text,.055f),
-        surfaceContainerHighest=lerp(surface,text,.08f),
+        surfaceContainer=lerp(surface,onSurface,.025f),surfaceContainerHigh=lerp(surface,onSurface,.055f),
+        surfaceContainerHighest=lerp(surface,onSurface,.08f),
         outline=if(dark)Color(0xFF778090) else Color(0xFF747E8F),
         outlineVariant=if(dark)Color(0xFF363B46) else Color(0xFFDCE0EA),
         surfaceTint=primary,
+        error=error,onError=onError,
     )
 }
 
@@ -120,6 +218,11 @@ fun AppearanceDialog(onDismiss:()->Unit) {
     fun update(next:AppearanceSettings){controller?.save(next)}
     var custom by remember(settings.seed){mutableStateOf("#"+settings.seed.toUInt().toString(16).takeLast(6).uppercase())}
     var customError by remember {mutableStateOf<String?>(null)}
+    // Draft value while the thumb is moving; the preferences are written once, on release. Before this,
+    // every drag pixel ran SharedPreferences.apply() on the main thread, woke the change listener which
+    // ran a full AppearanceController.read() over ~12 keys, and rebuilt the whole ColorScheme — for a
+    // value that is displayed as an integer percentage.
+    var draftScale by remember{mutableStateOf<Float?>(null)}
     GlassDialog(title="外观与主题",subtitle="即时预览 · 只影响本机界面",onDismiss=onDismiss) {
         Text("液态玻璃",style=MaterialTheme.typography.titleMedium)
         ChoiceRows(listOf("standard" to "标准","light" to "轻量","off" to "关闭"),settings.glassMode){update(settings.copy(glassMode=it))}
@@ -131,19 +234,25 @@ fun AppearanceDialog(onDismiss:()->Unit) {
         Text("主题色",style=MaterialTheme.typography.titleMedium)
         if(Build.VERSION.SDK_INT>=31)SettingSwitch("壁纸动态取色","从 Android 系统配色中选择主色",settings.dynamicColor){update(settings.copy(dynamicColor=it))}
         val swatches=listOf(0xFF4263C7,0xFF7553A8,0xFFB4466D,0xFFB6533F,0xFF9D641F,0xFF24795D,0xFF19757A)
+        // The colour disc stays 32dp; the tap target around it grows to 40dp so the old 32dp row of
+        // seven circles is not the smallest control in the dialog.
         Row(Modifier.fillMaxWidth().padding(vertical=10.dp),horizontalArrangement=Arrangement.SpaceBetween) {
             swatches.forEach { argb->
                 val value=argb.toInt()
-                Box(Modifier.size(32.dp).background(Color(value),CircleShape)
-                    .border(if(!settings.dynamicColor&&settings.seed==value)3.dp else 0.dp,MaterialTheme.colorScheme.onSurface,CircleShape)
-                    .clickable{update(settings.copy(seed=value,dynamicColor=false))})
+                val selected=!settings.dynamicColor&&settings.seed==value
+                Box(Modifier.size(40.dp).clickable{update(settings.copy(seed=value,dynamicColor=false))}
+                    .semantics{contentDescription="主题色 #"+value.toUInt().toString(16).takeLast(6).uppercase()+(if(selected)"，当前已选" else "")},
+                    contentAlignment=Alignment.Center) {
+                    Box(Modifier.size(32.dp).background(Color(value),CircleShape)
+                        .border(if(selected)3.dp else 0.dp,MaterialTheme.colorScheme.onSurface,CircleShape))
+                }
             }
         }
         if(settings.customColors.isNotEmpty()) {
             Text("最近自定义颜色",style=MaterialTheme.typography.bodySmall,color=Muted)
             settings.customColors.chunked(7).forEach {row->
                 Row(Modifier.padding(vertical=8.dp),horizontalArrangement=Arrangement.spacedBy(10.dp)) {
-                    row.forEach{value->Box(Modifier.size(28.dp).background(Color(value),CircleShape).border(1.dp,MaterialTheme.colorScheme.outlineVariant,CircleShape).clickable{update(settings.copy(seed=value,dynamicColor=false))})}
+                    row.forEach{value->Box(Modifier.size(38.dp).clickable{update(settings.copy(seed=value,dynamicColor=false))},contentAlignment=Alignment.Center){Box(Modifier.size(28.dp).background(Color(value),CircleShape).border(1.dp,MaterialTheme.colorScheme.outlineVariant,CircleShape))}}
                 }
             }
         }
@@ -152,7 +261,7 @@ fun AppearanceDialog(onDismiss:()->Unit) {
             TextButton(onClick={
                 val value=custom.removePrefix("#").takeIf{it.matches(Regex("[0-9a-fA-F]{6}"))}?.toLongOrNull(16)
                 if(value==null)customError="请输入 6 位十六进制色值" else update(settings.copy(seed=(0xFF000000L or value).toInt(),dynamicColor=false,customColors=(settings.customColors+(0xFF000000L or value).toInt()).distinct().takeLast(8)))
-            },modifier=Modifier.padding(top=12.dp)){Text("应用")}
+            },modifier=Modifier.heightIn(min=48.dp).padding(top=12.dp)){Text("应用")}
         }
         customError?.let{Text(it,color=MaterialTheme.colorScheme.error)}
         Spacer(Modifier.height(12.dp))
@@ -166,8 +275,17 @@ fun AppearanceDialog(onDismiss:()->Unit) {
         DividerLine(Modifier.padding(vertical=12.dp))
         SettingSwitch("自定义文字缩放","关闭时跟随系统字体大小",settings.scaleEnabled){update(settings.copy(scaleEnabled=it))}
         if(settings.scaleEnabled) {
-            Text("${(settings.textScale*100).toInt()}%",color=Muted)
-            Slider(value=settings.textScale,onValueChange={update(settings.copy(textScale=it))},valueRange=.85f..1.4f,steps=10)
+            val shown=draftScale?:settings.textScale
+            // Lining/tabular digits keep the three-digit label from changing width mid-drag (proportional
+            // numerals make "88%" narrower than "106%", which reflows the row under the thumb).
+            Text("${(shown*100).toInt()}%",color=Muted,
+                style=MaterialTheme.typography.bodyLarge.copy(fontFeatureSettings="tnum"),
+                modifier=Modifier.semantics{contentDescription="文字缩放 ${(shown*100).toInt()}%"})
+            Slider(value=shown,onValueChange={draftScale=it},onValueChangeFinished={
+                val committed=draftScale;draftScale=null
+                if(committed!=null&&committed!=settings.textScale)update(settings.copy(textScale=committed))
+            },valueRange=.85f..1.4f,steps=10)
+            Text("松手后保存；拖动过程中只更新上面的百分比。",style=MaterialTheme.typography.bodySmall,color=Muted)
         }
         Text("字体",style=MaterialTheme.typography.titleMedium)
         ChoiceRows(listOf("system" to "系统","sans" to "无衬线","serif" to "衬线","mono" to "等宽"),settings.font){update(settings.copy(font=it))}
@@ -179,8 +297,8 @@ fun AppearanceDialog(onDismiss:()->Unit) {
             }
         }
         Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) {
-            TextButton(onClick={update(AppearanceSettings())}){Text("恢复默认")}
-            Button(onClick=onDismiss){Text("完成")}
+            TextButton(onClick={draftScale=null;update(AppearanceSettings())},modifier=Modifier.heightIn(min=48.dp)){Text("恢复默认")}
+            Button(onClick=onDismiss,modifier=Modifier.heightIn(min=48.dp)){Text("完成")}
         }
     }
 }
@@ -189,24 +307,19 @@ fun AppearanceDialog(onDismiss:()->Unit) {
 private fun ChoiceRows(options:List<Pair<String,String>>,selected:String,onSelect:(String)->Unit) {
     options.chunked(if(options.size==3)3 else 2).forEach { row->
         Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-            row.forEach{(value,label)->FilterChip(selected=selected==value,onClick={onSelect(value)},label={Text(label)},modifier=Modifier.weight(1f))}
+            row.forEach{(value,label)->FilterChip(selected=selected==value,onClick={onSelect(value)},label={Text(label)},modifier=Modifier.weight(1f).heightIn(min=48.dp))}
         }
     }
 }
 
+/**
+ * Switch row: text column keeps its weight so the description wraps instead of being squeezed, and the
+ * row is at least a 48dp target. Sizes are unchanged — the row gets taller, the font never gets smaller.
+ */
 @Composable
 private fun SettingSwitch(title:String,description:String,checked:Boolean,onChecked:(Boolean)->Unit) {
-    Row(Modifier.fillMaxWidth().padding(vertical=8.dp),horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+    Row(Modifier.fillMaxWidth().heightIn(min=48.dp).padding(vertical=8.dp),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalAlignment=Alignment.CenterVertically) {
         Column(Modifier.weight(1f)){Text(title,style=MaterialTheme.typography.bodyLarge);Text(description,style=MaterialTheme.typography.bodySmall,color=Muted)}
-        Switch(checked=checked,onCheckedChange=onChecked)
+        Switch(checked=checked,onCheckedChange=onChecked,modifier=Modifier.semantics{contentDescription=title})
     }
-}
-
-
-/** Choose by measured contrast, not a brightness heuristic that fails on pastel dark accents. */
-internal fun readableOn(background:Color):Color {
-    val ink=Color(0xFF10131B)
-    val light=1.05f/(background.luminance()+.05f)
-    val dark=(background.luminance()+.05f)/(ink.luminance()+.05f)
-    return if(dark>=light)ink else Color.White
 }

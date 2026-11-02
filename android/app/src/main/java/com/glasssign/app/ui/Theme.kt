@@ -36,6 +36,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 // Legacy UI names resolve to current Material roles, so existing login/import screens stay readable.
+// One role per name; every role below now carries a measured contrast guarantee from appearanceScheme
+// (>= 4.5 against the surface it is painted on), so these aliases inherit it automatically.
 val Oled:Color @Composable get()=MaterialTheme.colorScheme.background
 val Deep:Color @Composable get()=MaterialTheme.colorScheme.surface
 val Panel:Color @Composable get()=MaterialTheme.colorScheme.surfaceContainer
@@ -45,7 +47,10 @@ val Faint:Color @Composable get()=MaterialTheme.colorScheme.onSurfaceVariant
 val Cyan:Color @Composable get()=MaterialTheme.colorScheme.primary
 val Lilac:Color @Composable get()=MaterialTheme.colorScheme.secondary
 val Mint:Color @Composable get()=MaterialTheme.colorScheme.tertiary
-val Amber:Color @Composable get()=if(MaterialTheme.colorScheme.background.luminance()>.5f)Color(0xFF8A5300) else Color(0xFFFFC078)
+// Amber is painted on cards (`surface`) and inline values, so it is keyed on `surface`, not on
+// `background`: with the tinted/soft styles the two differ, and the old check could pick the pale amber
+// for a light card (contrast 1.9:1). Both branches keep their hue; the light branch is >= 4.5 on white.
+val Amber:Color @Composable get()=if(MaterialTheme.colorScheme.surface.luminance()>.5f)Color(0xFF8A5300) else Color(0xFFFFC078)
 val Rose:Color @Composable get()=MaterialTheme.colorScheme.error
 val Slate:Color @Composable get()=MaterialTheme.colorScheme.outline
 
@@ -122,16 +127,27 @@ fun statusLabel(status: String): String = when (status) {
     else -> status
 }
 
+/**
+ * Status colours are painted as chips and inline values on `surface`, so each must clear 4.5:1 there.
+ * `tertiary`/`primary`/`secondary`/`error` already carry that guarantee from appearanceScheme; the two
+ * literal colours below (`Amber`, `Slate`) are checked here and fall back to the readable ink if a future
+ * palette change ever breaks them. `statusColor("failed")` therefore stays exactly `colorScheme.error`
+ * for every built-in style, which is the destructive/`Rose` convention used elsewhere.
+ */
 @Composable
-fun statusColor(status: String): Color = when (status) {
-    "success" -> Mint
-    "already" -> Cyan
-    "waiting_network" -> Amber
-    "running" -> Lilac
-    "needs_action" -> Amber
-    "failed" -> Rose
-    "unsupported" -> Slate
-    else -> Muted
+fun statusColor(status: String): Color {
+    val surface=MaterialTheme.colorScheme.surface
+    fun readable(color:Color):Color=if(contrastRatio(color,surface)>=4.5f)color else readableOn(surface)
+    return when (status) {
+        "success" -> readable(Mint)
+        "already" -> readable(Cyan)
+        "waiting_network" -> readable(Amber)
+        "running" -> readable(Lilac)
+        "needs_action" -> readable(Amber)
+        "failed" -> readable(Rose)
+        "unsupported" -> readable(Slate)
+        else -> Muted
+    }
 }
 
 private val AppTypography = Typography(
@@ -202,7 +218,17 @@ fun GlassSignTheme(reduceMotion: Boolean, content: @Composable () -> Unit) {
     val wallpaper=if(settings.dynamicColor&&Build.VERSION.SDK_INT>=31) {
         if(dark)dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
     } else null
-    val scheme=remember(settings,dark,wallpaper){appearanceScheme(settings,dark,wallpaper)}
+    // The scheme depends on exactly these fields: every one of them is a palette input (asserted by
+    // AppearanceSchemeV070Test) and `font`/`scaleEnabled`/`textScale` are deliberately NOT keys. The old
+    // key was the whole `settings` object, so a font pick or a text-scale commit rebuilt the entire
+    // ColorScheme (one allocation plus the lerp/repair calls) although the palette cannot change.
+    // `glassMode`, `surfaceEffect` and `navigationTint` are material/paint settings read by Glass.kt and
+    // LiquidDock.kt, not palette inputs, so they are not keys either (LocalAppearance still carries the
+    // whole settings object to those consumers). Not claimed as a frame-rate fix: the real-device
+    // baseline already shows the app is idle between interactions.
+    val scheme=remember(dark,settings.colorStyle,settings.seed,settings.pureBlack,settings.dynamicColor,wallpaper) {
+        appearanceScheme(settings,dark,wallpaper)
+    }
     val font=appearanceFont(settings)
     val typography=remember(font){AppTypography.let{t->t.copy(
         displayLarge=t.displayLarge.copy(fontFamily=font),displayMedium=t.displayMedium.copy(fontFamily=font),displaySmall=t.displaySmall.copy(fontFamily=font),

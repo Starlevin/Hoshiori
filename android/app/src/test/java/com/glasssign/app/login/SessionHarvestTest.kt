@@ -3,6 +3,7 @@ package com.glasssign.app.login
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -66,9 +67,32 @@ class SessionHarvestTest {
         assertEquals("device-from-web", c.getString("dId"))
     }
 
-    @Test fun sklandFallsBackToLocalDeviceWhenWebHasNone() {
-        val c = ready("skland", storage = mapOf("SK_OAUTH_CRED_KEY" to "cred", "SK_TOKEN_CACHE_KEY" to "sign"))
-        assertEquals("local-device", c.getString("dId"))
+    /** The signed context uses the official device id; a local/random UUID is never substituted for it. */
+    @Test fun sklandWithoutOfficialDeviceIdIsNotReady() {
+        val result = SessionHarvest.build(
+            "skland",
+            emptyMap(),
+            mapOf("SK_OAUTH_CRED_KEY" to "cred", "SK_TOKEN_CACHE_KEY" to "sign"),
+            "local-device",
+        )
+        assertTrue("a missing official device id must not become a Ready session: $result", result is HarvestResult.Incomplete)
+        val missing = (result as HarvestResult.Incomplete).missing
+        assertTrue("the message names the missing official identifier: $missing", missing.contains("设备标识"))
+        assertFalse("the message must not announce an authorization failure", missing.contains("授权失效"))
+        assertFalse("a local device id must not leak into the message", missing.contains("local-device"))
+    }
+
+    /** Same rule when the page stored the key as an empty/blank value. */
+    @Test fun sklandWithBlankOfficialDeviceIdIsNotReady() {
+        for (blank in listOf("", "  ", "\"\"")) {
+            val result = SessionHarvest.build(
+                "skland",
+                emptyMap(),
+                mapOf("SK_OAUTH_CRED_KEY" to "cred", "SK_TOKEN_CACHE_KEY" to "sign", "SK_SHUMEI_DEVICE_ID_KEY" to blank),
+                "local-device",
+            )
+            assertTrue("blank device id \"$blank\" must be incomplete, got $result", result is HarvestResult.Incomplete)
+        }
     }
 
     @Test fun sklandWithoutSignTokenIsNotSuccess() = missing("skland", storage = mapOf("SK_OAUTH_CRED_KEY" to "cred"))
@@ -104,7 +128,14 @@ class SessionHarvestTest {
     @Test fun credentialsNeverCarryPasswordOrCaptchaFields() {
         val inputs = listOf(
             ready("miyoushe", "account_id=1; cookie_token=t", allowed = miyousheCookies),
-            ready("skland", storage = mapOf("SK_OAUTH_CRED_KEY" to "c", "SK_TOKEN_CACHE_KEY" to "s")),
+            ready(
+                "skland",
+                storage = mapOf(
+                    "SK_OAUTH_CRED_KEY" to "c",
+                    "SK_TOKEN_CACHE_KEY" to "s",
+                    "SK_SHUMEI_DEVICE_ID_KEY" to "official-device",
+                ),
+            ),
             ready("kurobbs", "user_token=t", allowed = kuroCookies),
         )
         val forbidden = setOf("password", "passwd", "pwd", "smscode", "sms_code", "captcha", "otp")
@@ -137,5 +168,85 @@ class SessionHarvestTest {
     @Test fun redactDropsQueryAndFragment() {
         assertEquals("user.mihoyo.com/", LoginPlatforms.redact("https://user.mihoyo.com/?code=SECRET#/login"))
         assertEquals("", LoginPlatforms.redact(null))
+    }
+
+    // --- Skland session continuity (timing, not an authorization claim) ---------------------------
+
+    private fun storage(cred: String?, sign: String?, did: String?): Map<String, String> = buildMap {
+        cred?.let { put("SK_OAUTH_CRED_KEY", it) }
+        sign?.let { put("SK_TOKEN_CACHE_KEY", it) }
+        did?.let { put("SK_SHUMEI_DEVICE_ID_KEY", it) }
+    }
+
+    @Test fun sklandSessionTripleRequiresAllThreeValues() {
+        assertEquals("c", SessionHarvest.sklandSession(storage("c", "s", "d"))?.cred)
+        assertEquals("d", SessionHarvest.sklandSession(storage("c", "s", "d"))?.dId)
+        assertNull("cred alone is not a session", SessionHarvest.sklandSession(storage("c", null, "d")))
+        assertNull("a missing official device id is not a session", SessionHarvest.sklandSession(storage("c", "s", null)))
+        assertNull("blank values are not a session", SessionHarvest.sklandSession(storage("c", "s", "  ")))
+    }
+
+    @Test fun sklandHandsOverOnlyAfterTwoIdenticalConsecutiveReads() {
+        val c = SessionHarvest.SklandContinuity()
+        val one = SessionHarvest.sklandSession(storage("c1", "s1", "d1"))
+        assertNull("the first read is only a sample", c.accept(one))
+        assertEquals("the second identical read confirms", one, c.accept(one))
+    }
+
+    @Test fun sklandMidRewriteSampleIsDiscarded() {
+        val c = SessionHarvest.SklandContinuity()
+        // A page rewrite that produced a fresh cred with the previous sign token must never be accepted.
+        val torn = SessionHarvest.sklandSession(storage("c2", "s1", "d1"))
+        val settled = SessionHarvest.sklandSession(storage("c2", "s2", "d1"))
+        assertNull(c.accept(torn))
+        assertNull("values changed, so the pair restarts", c.accept(settled))
+        assertEquals("only the settled read observed twice is handed over", settled, c.accept(settled))
+    }
+
+    @Test fun sklandMissingValueRestartsThePair() {
+        val c = SessionHarvest.SklandContinuity()
+        val good = SessionHarvest.sklandSession(storage("c1", "s1", "d1"))
+        assertNull(c.accept(good))
+        assertNull("a read without the official device id clears the sample", c.accept(null))
+        assertNull("the old sample cannot be reused after a gap", c.accept(good))
+        assertEquals(good, c.accept(good))
+    }
+
+    @Test fun switchingAccountInvalidatesBothSampleAndConfirmation() {
+        val c = SessionHarvest.SklandContinuity()
+        val first = SessionHarvest.sklandSession(storage("c1", "s1", "d1"))
+        val second = SessionHarvest.sklandSession(storage("c2", "s2", "d2"))
+        c.accept(first); c.accept(first)
+        assertEquals(first, c.confirmed())
+
+        // Switching account: the pending sample and the confirmation both belong to the old session.
+        c.reset()
+        assertNull("reset clears the previous session", c.confirmed())
+        assertNull("a new account starts a new pair", c.accept(second))
+        assertEquals(second, c.accept(second))
+        assertEquals("only the new account is confirmed", second, c.confirmed())
+    }
+
+    @Test fun aConfirmedSessionIsNotRevokedByALaterTornRead() {
+        val c = SessionHarvest.SklandContinuity()
+        val good = SessionHarvest.sklandSession(storage("c1", "s1", "d1"))
+        c.accept(good); c.accept(good)
+        val torn = SessionHarvest.sklandSession(storage("c1", null, "d1"))
+        assertNull("a torn read yields no new confirmation", c.accept(torn))
+        assertEquals("but the session already confirmed stays confirmed", good, c.confirmed())
+    }
+
+    @Test fun continuityStateIsNeverSerializedIntoTheCredential() {
+        // The comparison lives in memory only: a built credential must not carry any continuity marker.
+        val c = ready(
+            "skland",
+            storage = mapOf(
+                "SK_OAUTH_CRED_KEY" to "cred",
+                "SK_TOKEN_CACHE_KEY" to "sign",
+                "SK_SHUMEI_DEVICE_ID_KEY" to "official-device",
+            ),
+        )
+        val keys = c.keys().asSequence().toSet()
+        assertEquals(setOf("cred", "signToken", "dId", "games", "communityCheckin", "source"), keys)
     }
 }

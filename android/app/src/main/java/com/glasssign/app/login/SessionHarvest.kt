@@ -50,10 +50,62 @@ object SessionHarvest {
         return raw
     }
 
+    /** The three values a Skland signature depends on; compared as one unit, never logged. */
+    data class SklandSession(val cred: String, val signToken: String, val dId: String)
+
+    /**
+     * Requires two consecutive identical reads before a Skland session is handed over.
+     *
+     * The official page writes `SK_OAUTH_CRED_KEY`, `SK_TOKEN_CACHE_KEY` and
+     * `SK_SHUMEI_DEVICE_ID_KEY` one after another, so a single poll can land in the middle of a
+     * rewrite (fresh cred, previous sign token, or an account switch already started). Accepting only
+     * a session observed twice in a row narrows that timing window. It does not prove the pair was
+     * issued together and it does not make an officially rejected request succeed.
+     *
+     * State is held in memory only. [reset] must be called whenever the page or account changes.
+     */
+    class SklandContinuity {
+        private var previous: SklandSession? = null
+        private var confirmed: SklandSession? = null
+
+        /** Clears the pending sample; the next read is treated as the first of a new pair. */
+        fun reset() { previous = null; confirmed = null }
+
+        /**
+         * Records the current read and returns the confirmed session once two consecutive reads match.
+         * A missing value, or any change of cred / sign token / device id, restarts the pair.
+         */
+        fun accept(current: SklandSession?): SklandSession? {
+            if (current == null || current.cred.isEmpty() || current.signToken.isEmpty() || current.dId.isEmpty()) {
+                previous = null
+                return null
+            }
+            if (previous == current) { confirmed = current; return confirmed }
+            previous = current
+            return null
+        }
+
+        /** The session a previous poll already confirmed, retained so a later read cannot revoke it. */
+        fun confirmed(): SklandSession? = confirmed
+    }
+
+    /** Extracts the Skland session triple, or null when the page has not supplied all three yet. */
+    fun sklandSession(storage: Map<String, String>): SklandSession? {
+        val cred = unwrap(storage["SK_OAUTH_CRED_KEY"])
+        val signToken = unwrap(storage["SK_TOKEN_CACHE_KEY"])
+        val dId = unwrap(storage["SK_SHUMEI_DEVICE_ID_KEY"])
+        if (cred.isEmpty() || signToken.isEmpty() || dId.isEmpty()) return null
+        return SklandSession(cred, signToken, dId)
+    }
+
+    /**
+     * @param deviceId the app's own local device id. Only mihoyo keeps it in the credential; Skland
+     *   must run on the official web device id, so this value is never substituted there.
+     */
     fun build(provider: String, jar: Map<String, String>, storage: Map<String, String>, deviceId: String): HarvestResult =
         when (provider) {
             "miyoushe" -> miyoushe(jar, deviceId)
-            "skland" -> skland(storage, deviceId)
+            "skland" -> skland(storage)
             "kurobbs" -> kurobbs(jar, storage)
             "tagged" -> tagged(jar, storage)
             else -> HarvestResult.Incomplete("该平台暂不支持网页登录")
@@ -81,12 +133,16 @@ object SessionHarvest {
         )
     }
 
-    private fun skland(storage: Map<String, String>, deviceId: String): HarvestResult {
+    private fun skland(storage: Map<String, String>): HarvestResult {
         val cred = unwrap(storage["SK_OAUTH_CRED_KEY"])
         val signToken = unwrap(storage["SK_TOKEN_CACHE_KEY"])
-        val platformDevice = unwrap(storage["SK_SHUMEI_DEVICE_ID_KEY"]).ifBlank { deviceId }
+        // The signed request context must carry the device id the official site issued together with
+        // this cred. Inventing one (a random UUID) would sign with an identity the platform never saw,
+        // so an absent official id is reported as "not ready" instead of being substituted.
+        val platformDevice = unwrap(storage["SK_SHUMEI_DEVICE_ID_KEY"])
         if (cred.isEmpty()) return HarvestResult.Incomplete("官方页面尚未返回森空岛登录凭据，请确认已登录成功")
         if (signToken.isEmpty()) return HarvestResult.Incomplete("官方页面尚未完成签名令牌初始化，请稍候重试")
+        if (platformDevice.isEmpty()) return HarvestResult.Incomplete("官方页面尚未提供森空岛设备标识，签名环境未就绪；请稍候或重新打开登录页")
         return HarvestResult.Ready(
             JSONObject()
                 .put("cred", cred)
