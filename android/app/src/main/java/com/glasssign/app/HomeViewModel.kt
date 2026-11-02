@@ -29,7 +29,20 @@ data class UiState(
     val scheduleEnabled:Boolean=false,val dailyTime:String="08:10",val waitingNetwork:Boolean=false,
     val bindings:List<GameBinding> = emptyList(),val timeline:List<TimelineRecord> = emptyList(),val focusAccountId:String?=null,
     val pendingLogin:PendingLogin?=null,val loginBusy:Boolean=false,val submitting:Boolean=false,
+    /** Today's per-game/community/authorization feedback, derived once per refresh (data/HomeFeedback.kt). */
+    val feedback:HomeFeedback?=null,
+    /** The last worker wrote an explicit failure reason (timeout etc.); shown instead of a generic message. */
+    val workerError:String?=null,
+    /** A specific, fixable problem raised by the last operation. The home page renders its own buttons for it. */
+    val fix:AuthFix?=null,
 )
+
+/**
+ * One concrete, fixable problem (never a generic "本地操作失败"): the home page shows the cause plus the buttons that
+ * can actually resolve it. [readOnly] buttons (reconcile / verify) never submit a check-in.
+ */
+data class AuthFix(val accountId:String,val provider:String,val nickname:String?=null,val cause:String,val retryable:Boolean=false)
+
 class HomeViewModel(application:Application):AndroidViewModel(application) {
     private val local=LocalServices.get(application)
     private val scheduler=SignScheduler(application)
@@ -45,7 +58,36 @@ class HomeViewModel(application:Application):AndroidViewModel(application) {
             }
         }
     }
-    private fun action(block:suspend ()->Unit) {viewModelScope.launch {try{block()}catch(_:kotlinx.coroutines.TimeoutCancellationException){state=state.copy(loginBusy=false,verifyingId=null,submitting=false,loading=false,historyLoading=false,message=Message("角色查询超时，可到账号页继续确认；原账号与记录保留",true))}catch(e:CancellationException){throw e}catch(e:AccountMismatchError){state=state.copy(loginBusy=false,message=Message(e.message.orEmpty(),true))}catch(_:Exception){state=state.copy(verifyingId=null,loginBusy=false,submitting=false,loading=false,historyLoading=false,message=Message("本地操作失败，请检查授权或稍后重试",true))}}}
+    /**
+     * Runs an operation and turns any failure into an explicit cause + a fix entry (data/HomeFeedback.kt
+     * [HomeFeedback]), never just a transient Snackbar. The generic wording is kept only as the fallback when no
+     * account can be attributed.
+     */
+    private fun action(fixAccount:String?=null,block:suspend ()->Unit) {
+        viewModelScope.launch {
+            try { block() }
+            catch(_:kotlinx.coroutines.TimeoutCancellationException) {
+                operationFailed(fixAccount,"操作超时（官方接口未在时限内返回），原账号与记录保留")
+            }
+            catch(e:CancellationException) { throw e }
+            catch(e:AccountMismatchError) { state=state.copy(loginBusy=false,message=Message(e.message.orEmpty(),true)) }
+            catch(e:Exception) { operationFailed(fixAccount,describeFailure(e)) }
+        }
+    }
+    private fun operationFailed(account:String?,cause:String) {
+        state=state.copy(verifyingId=null,loginBusy=false,submitting=false,loading=false,historyLoading=false,
+            fix=fixFor(account,cause),message=Message(cause,true))
+    }
+    /** Keeps the specific cause from the adapters ("塔吉多角色查询未完成（500）…") instead of a generic sentence. */
+    private fun describeFailure(e:Exception):String {
+        val raw=e.message.orEmpty().trim()
+        val text=if(raw.isBlank())"本地操作失败" else raw
+        return if(text.length>90)text.take(88)+"…" else text
+    }
+    private fun fixFor(accountId:String?,cause:String):AuthFix? {
+        val account=accountId?.let{id->state.overview?.accounts?.firstOrNull{it.id==id}}
+        return AuthFix(accountId.orEmpty(),account?.provider.orEmpty(),account?.nickname,cause,retryable=false)
+    }
     private suspend fun reload() {
         val snapshot=withContext(Dispatchers.IO) {
             val day=SignRepository.day();val records=local.repository.records(day)
@@ -54,19 +96,60 @@ class HomeViewModel(application:Application):AndroidViewModel(application) {
         val bindings=withContext(Dispatchers.IO){local.repository.bindings()}
         val history=withContext(Dispatchers.IO){local.repository.history()}
         val timeline=withContext(Dispatchers.IO){history.flatMap{day->local.repository.records(day.day).map{TimelineRecord(day.day,it)}}}
-        state=state.copy(bindings=bindings,history=history,timeline=timeline,overview=snapshot,loading=false,scheduleEnabled=local.prefs.getBoolean("schedule_enabled",false),dailyTime=local.prefs.getString("daily_time","08:10")!!)
+        val workerError=local.prefs.getString("last_worker_error",null)
+        val storedBook=local.prefs.getString(HOME_FEEDBACK_PREFS,null)
+        val book=observeRun(readBook(storedBook),snapshot.lastStartedAt,snapshot.lastFinishedAt,state.jobRunning)
+        // Only one finished run per new `last_finished` value: a refresh loop cannot multiply result cards.
+        if(serializeBook(book)!=storedBook)local.prefs.edit().putString(HOME_FEEDBACK_PREFS,serializeBook(book)).apply()
+        val feedback=summarize(
+            day=snapshot.date,
+            accounts=snapshot.accounts.map{AuthAccount(it.id,it.provider,it.nickname,it.enabled,it.authState,it.authMessage,it.bindingPending,it.roleScope,it.gameIds)},
+            // Enabled bindings of ENABLED accounts only: a paused account may not raise the "应签到" denominator.
+            tasks=bindings.filter{it.enabled&&snapshot.accounts.firstOrNull{a->a.id==it.accountId}?.enabled==true}.distinctBy{it.accountId to it.targetId},
+            records=snapshot.records,
+            accountNames=snapshot.accounts.associate{it.id to it.nickname},
+            running=state.jobRunning||state.submitting,
+            queued=state.waitingNetwork,
+            lastStartedAt=snapshot.lastStartedAt,
+            lastFinishedAt=snapshot.lastFinishedAt,
+        ).let{base->base.copy(result=runResult(base,local.prefs.getString("last_trigger","").orEmpty(),snapshot.lastFinishedAt.orEmpty(),book.sequence,workerError))}
+        state=state.copy(bindings=bindings,history=history,timeline=timeline,overview=snapshot,loading=false,feedback=feedback,workerError=workerError,scheduleEnabled=local.prefs.getBoolean("schedule_enabled",false),dailyTime=local.prefs.getString("daily_time","08:10")!!)
     }
     fun refresh(showLoading:Boolean=true) {if(showLoading)state=state.copy(loading=true);action{reload()}}
     fun runNow(accountIds:List<String>?=null) {
         if(state.jobRunning || state.waitingNetwork || state.submitting) {
             state=state.copy(message=Message("已有本地任务执行或排队，完成后可再次检查"));return
         }
-        state=state.copy(submitting=true)
+        state=state.copy(submitting=true,fix=null)
         action {
             withContext(Dispatchers.IO){scheduler.run(accountIds)}
-            state=state.copy(submitting=false,message=Message("本地任务已提交；结果见记录页"))
+            // The result is read back from the records on the next reload; the home page shows the summary card.
+            state=state.copy(submitting=false)
+            reload()
         }
     }
+    /** One account's game/role retry, used by the per-row 重试 in the home feedback card. */
+    fun retryAccount(accountId:String) {runNow(listOf(accountId))}
+    /** The fix entry was dismissed by the user (it is derived from a failure, not from stored state). */
+    fun dismissFix() {state=state.copy(fix=null)}
+    /**
+     * Re-reads the authorization + roles of ONE account (read-only: `local.engine.verify` submits no check-in) and
+     * turns the outcome into either a pending binding sheet or an explicit fix entry with the real cause.
+     */
+    fun verifyAccount(accountId:String) {state=state.copy(verifyingId=accountId,fix=null);action(accountId) {
+        val a=withContext(Dispatchers.IO){local.repository.accounts().firstOrNull{it.id==accountId}}
+        // A pending draft needs the binding sheet, not a probe: keep the existing path (it owns its sheet).
+        if(a!=null&&(a.bindingPending||a.authState=="pending")) {
+            state=state.copy(verifyingId=null)
+            verifyAuthorization(accountId)
+            return@action
+        }
+        val text=withContext(Dispatchers.IO){local.engine.verify(accountId)}
+        val after=withContext(Dispatchers.IO){local.repository.accounts().firstOrNull{it.id==accountId}}
+        reload()
+        val usable=after?.authState=="valid"
+        state=state.copy(verifyingId=null,fix=if(usable)null else fixFor(accountId,text))
+    }}
     fun addAccount(provider:String,nickname:String,credentials:JSONObject,gameId:String="") {action {
         val id=withContext(Dispatchers.IO){local.add(provider,nickname,credentials,gameId)};reload();runNow(listOf(id))
     }}
@@ -151,7 +234,10 @@ class HomeViewModel(application:Application):AndroidViewModel(application) {
             state=state.copy(verifyingId=null,pendingLogin=PendingLogin(account.id,account.provider,account.nickname,outcome.roles,outcome.message,outcome.availableGameIds,selection.games,roleChoices=outcome.roleChoices,selectedRoleIds=selection.roles,providerUserId=outcome.providerUserId,autoSignEnabled=selection.autoSign))
             return@action
         }
-        val message=withContext(Dispatchers.IO){local.engine.verify(accountId)};reload();state=state.copy(verifyingId=null,message=Message(message))
+        val message=withContext(Dispatchers.IO){local.engine.verify(accountId)};reload()
+        // A failed probe now keeps its own cause and its fix buttons; a clean probe stays a one-line confirmation.
+        val usable=state.overview?.accounts?.firstOrNull{it.id==accountId}?.authState=="valid"
+        state=state.copy(verifyingId=null,fix=if(usable)null else fixFor(accountId,message),message=if(usable)Message(message) else null)
     }}
     fun deleteAccount(accountId:String,nickname:String) {action {
         withContext(Dispatchers.IO){local.delete(accountId)};reload();state=state.copy(message=Message("已删除本机账号、授权与记录"))

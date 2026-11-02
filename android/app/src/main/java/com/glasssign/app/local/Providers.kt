@@ -1,6 +1,9 @@
 package com.glasssign.app.local
 
 import org.json.JSONObject
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import java.time.Instant
+import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.UUID
 
@@ -70,17 +73,65 @@ class MiyousheAdapter(private val http: Transport) : ProviderAdapter {
 
 class SklandAdapter(private val http:Transport) : ProviderAdapter {
     private val base="https://zonai.skland.com/api/v1"
-    private fun call(c:JSONObject,path:String,body:JSONObject?=null,endfield:Boolean=false,extra:Map<String,String> = emptyMap(),get:Boolean=false):JSONObject {
+    private fun renew(c:JSONObject,persist:()->Unit) {
+        required(c,"cred","signToken","dId")
+        val cached=c.getString("dId").trim()
+        if(cached.startsWith("{")) {
+            val id=runCatching{JSONObject(cached).opt("id") as? String}.getOrNull()?.trim().orEmpty()
+            if(id.isEmpty())throw SignError("config","旧版森空岛设备缓存无效，请重新授权；原记录保留")
+            c.put("dId",id)
+        }
+        // The official GET refresh accepts the long-lived cred; short-lived signing tokens must not
+        // be reused across daily runs. Refresh and persist before discovering roles or submitting.
+        val response=call(c,"/auth/refresh",get=true)
+        if(response.optString("code")!="0")throw SignError("auth","森空岛授权续期被拒绝，请重新登录；原账号与记录保留")
+        val token=(response.optJSONObject("data")?.opt("token") as? String)?.trim().orEmpty()
+        if(token.isEmpty())throw SignError("protocol","森空岛续期响应缺少签名令牌，已停止后续请求")
+        c.put("signToken",token)
+        val server=response.optLong("timestamp",0)
+        if(server in 1_000_000_000L..9_999_999_999L)c.put("timeOffsetSeconds",server-System.currentTimeMillis()/1000)
+        persist()
+    }
+    private fun call(c:JSONObject,path:String,body:JSONObject?=null,endfield:Boolean=false,extra:Map<String,String> = emptyMap(),get:Boolean=false,query:Map<String,String> = emptyMap()):JSONObject {
         required(c,"cred","signToken","dId")
         val time=((System.currentTimeMillis()/1000)+c.optLong("timeOffsetSeconds")).toString()
         val ctx=linkedMapOf("platform" to if(endfield)"3" else "1","timestamp" to time,"dId" to c.getString("dId"),"vName" to if(endfield)"1.0.0" else "1.5.1")
         // Fixed order and web-compatible escaping are both required by the signature.
         val context=Signing.sklandContext(ctx.getValue("platform"),time,c.getString("dId"),ctx.getValue("vName"))
         val text=body?.toString().orEmpty()
-        val headers=ctx+mapOf("cred" to c.getString("cred"),"sign" to Signing.skland("/api/v1$path",text,time,context,c.getString("signToken")),"User-Agent" to "Skland/1.5.1 (com.hypergryph.skland; build:100501001; Android 34; ) Okhttp/4.11.0","X-Requested-With" to "com.hypergryph.skland")+extra
-        return http.call(if(get)"GET" else "POST",base+path,headers,body=text)
+        val signedData=if(get)(base+path).toHttpUrl().newBuilder().apply{query.forEach{(k,v)->addQueryParameter(k,v)}}.build().encodedQuery.orEmpty() else text
+        val headers=ctx+mapOf("cred" to c.getString("cred"),"sign" to Signing.skland("/api/v1$path",signedData,time,context,c.getString("signToken")),"User-Agent" to "Skland/1.5.1 (com.hypergryph.skland; build:100501001; Android 34; ) Okhttp/4.11.0","X-Requested-With" to "com.hypergryph.skland")+extra
+        return http.call(if(get)"GET" else "POST",base+path,headers,query=query,body=if(get)null else text)
+    }
+    private fun attendance(c:JSONObject,t:SignTarget,persist:()->Unit):SignResult {
+        val parts=t.id.split('|')
+        if(parts.size!=3||parts[0]!="arknights"||parts.drop(1).any{it.isBlank()||!it.all(Char::isDigit)})
+            return SignResult("uncertain","此角色尚无已验证的独立状态查询，请在官方应用核对；未重新提交")
+        renew(c,persist)
+        val response=call(c,"/game/attendance",get=true,query=linkedMapOf("gameId" to parts[2],"uid" to parts[1]))
+        val data=response.optJSONObject("data")
+        val records=data?.optJSONArray("records")
+        if(response.optString("code")!="0"||data==null||records==null)
+            return SignResult("uncertain","官方签到日历未返回完整记录；未重新提交")
+        fun date(value:Long)=runCatching{if(value !in 1_000_000_000L..9_999_999_999L)null else Instant.ofEpochSecond(value).atZone(ZoneId.of("Asia/Shanghai")).toLocalDate()}.getOrNull()
+        val today=date(data.optLong("currentTs",0))
+        if(today==null||today!=ZonedDateTime.now(ZoneId.of("Asia/Shanghai")).toLocalDate())
+            return SignResult("uncertain","官方签到日期未确认或与手机日期不一致；未重新提交")
+        var malformed=false
+        for(index in 0 until records.length()) {
+            val recordDay=date(records.optJSONObject(index)?.optLong("ts",0) ?: 0)
+            if(recordDay==today)return SignResult("already","只读官方签到日历确认今日已签到")
+            if(recordDay==null)malformed=true
+        }
+        return if(malformed)SignResult("uncertain","官方签到记录格式未确认；未重新提交")
+            else SignResult("pending","官方签到日历尚无今日记录")
+    }
+    override fun queryStatus(c:JSONObject,t:SignTarget,persist:()->Unit):SignResult {
+        val state=attendance(c,t,persist)
+        return if(state.status=="pending")SignResult("uncertain","官方日历尚未确认今日已签；仅查询，未重新提交") else state
     }
     override fun targets(c:JSONObject,persist:()->Unit):List<SignTarget> {
+        renew(c,persist)
         val r=call(c,"/game/player/binding",get=true)
         if(r.optString("code")!="0")throw SignError("auth","森空岛授权失效或角色查询失败")
         val selected=c.strings("games",listOf("arknights","endfield"));val items=mutableListOf<SignTarget>()
@@ -103,6 +154,10 @@ class SklandAdapter(private val http:Transport) : ProviderAdapter {
     }
     override fun checkin(c:JSONObject,t:SignTarget,persist:()->Unit):SignResult {
         val p=t.id.split('|')
+        if(p[0]=="arknights"&&p.size==3) {
+            val state=attendance(c,t,persist)
+            if(state.status!="pending")return state
+        }
         val r=when {
             p[0]=="endfield"&&p.size==3 -> call(c,"/game/endfield/attendance",endfield=true,extra=mapOf("sk-game-role" to "3_${p[1]}_${p[2]}"))
             p[0]=="arknights"&&p.size==3 -> call(c,"/game/attendance",JSONObject().put("uid",p[1]).put("gameId",p[2]))
@@ -110,7 +165,13 @@ class SklandAdapter(private val http:Transport) : ProviderAdapter {
             else -> return SignResult("needs_action","请在森空岛绑定角色")
         }
         if(r.optString("code")=="10001")return if(listOf("已签到","重复").any{r.optString("message").contains(it)})SignResult("already","官方提示今日已签") else SignResult("needs_action","设备授权需核对，请在官方应用处理")
-        return result(r.optString("code"),auth=setOf("10003"),captcha=setOf("10002"))
+        val outcome=result(r.optString("code"),auth=setOf("10003"),captcha=setOf("10002"))
+        if(p[0]=="arknights"&&outcome.status=="success") {
+            val confirmation=try{attendance(c,t,persist)}catch(_:Exception){null}
+            return if(confirmation?.status=="already")SignResult("success","签到成功，官方状态已确认")
+                else SignResult("uncertain","提交已接受，但官方日历尚未确认今日状态；未重新提交")
+        }
+        return outcome
     }
 }
 

@@ -70,7 +70,7 @@ class SignWorker(context:Context,params:WorkerParameters):CoroutineWorker(contex
             s.prefs.edit().putString("last_finished",SignRepository.now()).putString("last_worker_error","任务等待超时，请查看记录；结果不确定的任务不会自动重发").apply()
             return@withContext Result.failure()
         }
-        s.prefs.edit().putString("last_finished",SignRepository.now()).putString("last_trigger",if(scheduled)"scheduled" else "manual").apply()
+        s.prefs.edit().putString("last_finished",SignRepository.now()).putString("last_trigger",if(scheduled)"scheduled" else "manual").remove("last_worker_error").putString("last_worker_status","success").apply()
         if(scheduled&&SchedulePolicy.canCompleteDay(summary.day,SignRepository.day(),summary.waiting,summary.retryPending))
             s.prefs.edit().putString("last_scheduled_day",summary.day).commit()
         notifyResult(applicationContext,summary)

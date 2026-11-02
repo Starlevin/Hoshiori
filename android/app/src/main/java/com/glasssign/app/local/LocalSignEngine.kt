@@ -60,7 +60,9 @@ class LocalSignEngine(val repository:SignRepository,val credentials:LocalCredent
             credentials.save(id,c)
             val valid=targets.any{it.isBoundRole()}
             val message=if(valid)"授权可读取角色，尚未验证真实签到" else "授权未发现角色，请到官方应用确认"
-            repository.auth(id,if(valid)"valid" else "needs_action",message);message
+            repository.auth(id,if(valid)"valid" else "needs_action",message)
+            if(valid)repository.clearDiscoveryFailure(id)
+            message
         } catch(e:Exception){ val r=failure(e);repository.auth(id,r.status,r.message);r.message }
     }
 
@@ -69,6 +71,14 @@ class LocalSignEngine(val repository:SignRepository,val credentials:LocalCredent
         val record=repository.records(SignRepository.day()).firstOrNull{it.accountId==id&&it.targetId==target} ?: return@withLock "只可校验今天已有记录"
         val c=GameCatalog.scope(a.provider,a.gameIds,credentials.read(id))
         val result=try{adapters.getValue(a.provider).queryStatus(c,SignTarget(target,record.targetName)){credentials.save(id,c)}}catch(e:Exception){SignResult("uncertain",failure(e).message)}
+        if(result.status=="uncertain"&&record.status in setOf("success","already")) {
+            val known=when(record.resultSource){"official"->"已有官方确认的完成记录";"accepted"->"已有官方接受提交的记录";else->"已有本机完成记录"}
+            return@withLock "$known；本次只读核对未取得新结论，原记录已保留"
+        }
+        if(result.status=="already") {
+            repository.auth(id,"valid","授权可读取官方签到状态；其他角色仍按各自记录判断")
+            repository.clearDiscoveryFailure(id)
+        }
         repository.reconcile(SignRepository.day(),id,target,result);result.message
     }
     /** Enumerates games using existing authorization, without submitting any check-in. */

@@ -151,11 +151,19 @@ internal data class PageUiState(
     val attention:Boolean,
     val scheduleEnabled:Boolean,
     val dailyTime:String,
+    /**
+     * Today's explicit feedback model (data/HomeFeedback.kt): per-game rows, the separate community and
+     * authorization lanes, the phase and the last run's result. `null` only before the first reload.
+     */
+    val feedback:HomeFeedback?=null,
+    /** The ViewModel's fix entry for the last failed operation (cause + buttons), not derived from records. */
+    val fix:AuthFix?=null,
+    val workerError:String?=null,
 )
 
 @Composable
 private fun rememberPageUiState(s:UiState,safeAccounts:List<Account>):PageUiState = remember(
-    s.overview,s.bindings,s.timeline,s.scheduleEnabled,s.dailyTime
+    s.overview,s.bindings,s.timeline,s.scheduleEnabled,s.dailyTime,s.feedback,s.fix,s.workerError
 ) {
     val accounts=safeAccounts
     val byId=accounts.associateBy{it.id}
@@ -172,6 +180,7 @@ private fun rememberPageUiState(s:UiState,safeAccounts:List<Account>):PageUiStat
         tasks=tasks, completed=tasks.count{(it.accountId+"|"+it.targetId) in completedTargets},
         attention=records.any{present(it).group in ATTENTION_GROUPS},
         scheduleEnabled=s.scheduleEnabled, dailyTime=s.dailyTime,
+        feedback=s.feedback, fix=s.fix, workerError=s.workerError,
     )
 }
 
@@ -354,6 +363,9 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
         // [H1] The only place WindowInsets are read. Its composition contains the dock call and nothing else,
         // so an IME frame recomposes ~2 composables instead of the page body + four branches.
         if(!modalOpen)DockOverlay(backdrop=backdrop,policy=policy,selected=scope.tab,onSelect=onSelect,enabled=true)
+        // Feedback pass: a specific failure now renders as the home "这一步没有完成" card with its own fix buttons
+        // (see ui/SignFeedback.kt), so only neutral confirmations still use the transient Snackbar -- one failure no
+        // longer disappears after 6.5 seconds with no way to act on it.
         s.message?.let{message->Snackbar(Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(16.dp),action={TextButton(onClick={vm.dismissMessage(message.at)}){Text("知道了")}}){Text(message.text)}}
         if(s.loginBusy&&s.pendingLogin==null)Surface(Modifier.align(Alignment.Center),shape=RoundedCornerShape(24.dp)){Column(Modifier.padding(24.dp),horizontalAlignment=Alignment.CenterHorizontally){CircularProgressIndicator();Spacer(Modifier.height(12.dp));Text("正在读取账号与角色…")}}
     }
@@ -402,6 +414,9 @@ internal class VmActions(private val vm:HomeViewModel) {
     fun setReduceMotion(value:Boolean){vm.setReduceMotion(value)}
     fun saveSchedule(enabled:Boolean,time:String){vm.saveSchedule(enabled,time)}
     fun refresh(showLoading:Boolean){vm.refresh(showLoading)}
+    fun verifyAccount(id:String){vm.verifyAccount(id)}
+    fun retryAccount(id:String){vm.retryAccount(id)}
+    fun dismissFix(){vm.dismissFix()}
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -472,29 +487,22 @@ private fun LazyListScope.rows(
 private fun LazyListScope.HomePage(ui:PageUiState,s:UiState,vm:VmActions,onTab:(Int)->Unit) {
     val records=ui.records
     val accounts=ui.accounts
-    val allDone=ui.tasks.isNotEmpty()&&ui.completed==ui.tasks.size&&!ui.attention
+
     if(accounts.isEmpty()) {
         item(key="empty",contentType="empty"){QCard{Text("还没有绑定账号",style=MaterialTheme.typography.headlineSmall);Text("绑定一次，每日由手机本地签到。",color=Muted);Button(onClick={onTab(1)},modifier=Modifier.fillMaxWidth().heightIn(min=50.dp)){Text("去绑定账号")}}}
     } else {
-        item(key="summary",contentType="summary"){QCard{
-            Text(
-                if(s.jobRunning||s.submitting)"正在签到" else if(s.waitingNetwork)"等待系统执行" else if(accounts.none{it.enabled})"签到已暂停" else if(ui.tasks.isEmpty())"角色待同步" else "已成功 ${ui.completed} / ${ui.tasks.size} 项",
-                style=MaterialTheme.typography.headlineMedium
-            )
-            Text("按游戏与角色统计 · 社区奖励另记",color=Muted)
-            if(accounts.any{account->ui.bindings.none{it.accountId==account.id}})Text("部分旧账号角色待读取。到账号详情管理游戏，不以账号数量代替签到项。",style=MaterialTheme.typography.bodySmall,color=Muted)
-            Button(onClick={
-                if(accounts.none{it.enabled})onTab(1) else if(allDone||ui.attention)onTab(2) else vm.runNow()
-            },enabled=!s.jobRunning&&!s.submitting&&!s.waitingNetwork,modifier=Modifier.fillMaxWidth().heightIn(min=54.dp).testTag("home-cta")){
-                Text(if(s.jobRunning||s.submitting)"正在签到…" else if(accounts.none{it.enabled})"管理账号" else if(allDone)"查看今日记录" else if(ui.attention)"处理未完成项" else "立即签到")
+        // v0.7.4 feedback pass: ONE status card (state word + phase + per-lane counts + the primary action), then
+        // the last run's readable result, then a specific fix entry when an operation failed, then at most three
+        // lane cards (游戏 / 授权 / 社区). Before this the page emitted one generic failure card per account, one
+        // card per binding task with a bare record status, and a count that merged 社区奖励 into "已成功 N 项".
+        // Everything comes from ui.feedback (data/HomeFeedback.kt), computed once per state change.
+        HomeFeedbackCards(ui,s,vm,onTab)
+        FeedbackLaneCards(ui,vm,onTab)
+        // Legacy accounts without any binding row still need an entry point from the home page.
+        if(ui.feedback==null) {
+            rows(ui.authIssues,key={"auth-${it.id}"},contentType="auth-issue"){account->
+                QCard({onTab(1)}){Text("${providerMeta(account.provider).title} · ${safeLabel(account.nickname)}需要处理",color=MaterialTheme.colorScheme.error);Text("点击修复授权",style=MaterialTheme.typography.bodySmall,color=Muted)}
             }
-        }}
-        rows(ui.authIssues,key={"auth-${it.id}"},contentType="auth-issue"){account->
-            QCard({onTab(1)}){Text("${providerMeta(account.provider).title} · ${safeLabel(account.nickname)}需要处理",color=MaterialTheme.colorScheme.error);Text("点击修复授权",style=MaterialTheme.typography.bodySmall,color=Muted)}
-        }
-        items(ui.tasks,key={it.accountId+"|"+it.targetId},contentType={"task"}){b->
-            val record=records.firstOrNull{it.accountId==b.accountId&&it.targetId==b.targetId}
-            QCard({onTab(1)}){Row(verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text(safeLabel(b.name),style=MaterialTheme.typography.titleMedium,overflow=TextOverflow.Ellipsis,maxLines=2);Text(safeLabel(ui.byId[b.accountId]?.nickname.orEmpty()),style=MaterialTheme.typography.bodySmall,color=Muted,overflow=TextOverflow.Ellipsis,maxLines=1)};QResult(record)}}
         }
     }
     item(key="plan",contentType="plan"){QCard({onTab(3)}){Text("每日计划",style=MaterialTheme.typography.titleMedium);Text(if(ui.scheduleEnabled)"已开启 · ${ui.dailyTime} 后由系统安排" else "未开启 · 可在设置中安排",color=Muted);Text("最近实际执行：${qTime(s.overview?.lastFinishedAt)}",style=MaterialTheme.typography.bodySmall,color=Muted);Text("下次预计：${qNext(s)}",style=MaterialTheme.typography.bodySmall,color=Muted)}}
@@ -519,10 +527,21 @@ private fun LazyListScope.AccountDetailPage(scope:ScopeState,ui:PageUiState,a:Ac
         QSwitch("启用此账号签到","关闭后手动与自动队列均跳过",a.enabled){vm.setEnabled(a.id,it)}
         QSwitch("参加每日自动签到","需开启全局计划；关闭后仍可手动签到",a.autoSignEnabled){vm.autoEnabled(a.id,it)}
         OutlinedButton(onClick={vm.manageGames(a.id)},enabled=!s.loginBusy,modifier=Modifier.fillMaxWidth().heightIn(min=48.dp).testTag("manage-games")){Text("管理游戏与角色")}
-        TextButton(onClick={vm.verifyAuthorization(a.id)}){Text("验证授权（不签到）")}
-        val done=ui.records.filter{it.accountId==a.id}.let{it.isNotEmpty()&&it.all{r->present(r).group=="success"}}
-        Text(if(done)"今日角色已全部签到" else "尚未完成今天全部角色",style=MaterialTheme.typography.bodySmall,color=Muted)
-        Button(onClick={if(done)vm.runNow(null) else vm.runNow(listOf(a.id))},enabled=a.enabled&&!s.jobRunning&&!s.submitting&&!s.waitingNetwork,modifier=Modifier.fillMaxWidth().heightIn(min=48.dp)){Text(if(done)"查看记录" else "立即签到")}
+        TextButton(onClick={vm.verifyAccount(a.id)},enabled=!s.loginBusy&&!s.jobRunning&&!s.submitting){Text("验证授权（不签到）")}
+        val own=ui.feedback?.gameRows?.filter{it.accountId==a.id}.orEmpty().ifEmpty{null}
+        val done=own?.let{rows->rows.isNotEmpty()&&rows.all{it.state==RowState.COMPLETED}} ?: ui.records.filter{it.accountId==a.id}.let{it.isNotEmpty()&&it.all{r->present(r).group=="success"}}
+        Text(
+            when {
+                own==null -> if(done)"今日角色已全部签到" else "尚未完成今天全部角色"
+                else -> "今日已完成 ${own.count{it.state==RowState.COMPLETED}} / ${own.size} 项"+
+                    (own.count{it.state==RowState.UNCERTAIN}.takeIf{it>0}?.let{" · 待确认 $it"} ?: "")+
+                    (own.count{it.state==RowState.SUBMITTED}.takeIf{it>0}?.let{" · 待复核 $it"} ?: "")
+            },
+            style=MaterialTheme.typography.bodySmall,color=Muted
+        )
+        val authProblem=ui.feedback?.authRows?.firstOrNull{it.accountId==a.id}
+        if(authProblem!=null)Text("${authProblem.label}：${authProblem.detail}",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error,maxLines=3,overflow=TextOverflow.Ellipsis)
+        Button(onClick={vm.retryAccount(a.id)},enabled=a.enabled&&!s.jobRunning&&!s.submitting&&!s.waitingNetwork,modifier=Modifier.fillMaxWidth().heightIn(min=48.dp)){Text(if(done)"重新检查此账号" else "立即签到")}
     }}
     items(owned,key={it.targetId},contentType={"binding"}){b->QCard{QSwitch(safeLabel(b.name),"${GameCatalog.find(b.gameId)?.title} · 独立角色签到项",b.enabled){vm.bindingEnabled(a.id,b.targetId,it)}}}
     item(key="maintenance",contentType="maintenance"){QCard{
@@ -639,8 +658,6 @@ private fun LazyListScope.SettingsPage(ui:PageUiState,s:UiState,policy:GlassPoli
     }
 }
 
-/** Same overflow rule as [QResultRow]: bounded width, ellipsized, never a smaller font. */
-@Composable private fun QResult(r:CheckRecord?){val p=r?.let{present(it)};Text(p?.label ?: "待签到",modifier=Modifier.widthIn(max=SUBLABEL_MAX),style=MaterialTheme.typography.labelLarge,color=when(p?.group){"success"->MaterialTheme.colorScheme.primary;"attention","uncertain"->MaterialTheme.colorScheme.error;else->Muted},maxLines=2,overflow=TextOverflow.Ellipsis)}
 
 /**
  * Status word on a record card. Bounded in width so a long `present().label` can never eat the row:
@@ -650,7 +667,7 @@ private fun LazyListScope.SettingsPage(ui:PageUiState,s:UiState,policy:GlassPoli
  */
 @Composable private fun QResultRow(row:RecordRow,modifier:Modifier=Modifier){Text(row.presentation.label,modifier=modifier,style=MaterialTheme.typography.labelLarge,color=when(row.presentation.group){"success"->MaterialTheme.colorScheme.primary;"attention","uncertain"->MaterialTheme.colorScheme.error;else->Muted},maxLines=1,overflow=TextOverflow.Ellipsis)}
 
-private val SUBLABEL_MAX=128.dp
+internal val SUBLABEL_MAX=128.dp
 
 // Page content inset, shared by the LazyColumn contentPadding and by rows that must bleed past it.
 private val PAGE_INSET=20.dp
@@ -677,7 +694,7 @@ private fun Modifier.bleed(inset:Dp):Modifier = this.layout { measurable, constr
     layout(placeable.width+extra,placeable.height){placeable.place(px,0)}
 }
 
-private fun qTime(value:String?):String=if(value.isNullOrBlank())"尚无记录" else runCatching{OffsetDateTime.parse(value).atZoneSameInstant(SignRepository.TZ).format(DateTimeFormatter.ofPattern("MM-dd HH:mm:ss"))}.getOrDefault(value.take(19))
+internal fun qTime(value:String?):String=if(value.isNullOrBlank())"尚无记录" else runCatching{OffsetDateTime.parse(value).atZoneSameInstant(SignRepository.TZ).format(DateTimeFormatter.ofPattern("MM-dd HH:mm:ss"))}.getOrDefault(value.take(19))
 private fun qNext(s:UiState):String{if(!s.scheduleEnabled)return "未开启";if(s.waitingNetwork)return "等待网络或系统调度";return runCatching{val now=ZonedDateTime.now(SignRepository.TZ);var next=now.toLocalDate().atTime(LocalTime.parse(s.dailyTime)).atZone(SignRepository.TZ);if(next<now)next=next.plusDays(1);next.format(DateTimeFormatter.ofPattern("MM-dd HH:mm"))+" 后（非精确时间）"}.getOrDefault("等待系统安排")}
 
 private val providerOptions=listOf("all" to "全部平台")+Providers.map{it.id to it.title}
