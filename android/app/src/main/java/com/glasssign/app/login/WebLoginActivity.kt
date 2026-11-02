@@ -105,6 +105,7 @@ class WebLoginActivity : ComponentActivity() {
     private var poll: Job? = null
     private var closed = false
 
+    private var sessionReady by mutableStateOf(false)
     private var status by mutableStateOf("正在打开官方登录页…")
     private var progress by mutableStateOf(0.08f)
     private var blocked by mutableStateOf<String?>(null)
@@ -116,7 +117,7 @@ class WebLoginActivity : ComponentActivity() {
         // The official page may show the user's own password / SMS code: keep it out of screenshots,
         // the recent-tasks thumbnail and any screen recorder. Debug builds stay capturable so the
         // login page can be reviewed; shipped builds are always protected.
-        if (!com.glasssign.app.BuildConfig.DEBUG) {
+        if (true) {
             window.setFlags(
                 android.view.WindowManager.LayoutParams.FLAG_SECURE,
                 android.view.WindowManager.LayoutParams.FLAG_SECURE,
@@ -129,6 +130,10 @@ class WebLoginActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this) { cancelLogin() }
         setContent {
             GlassSignTheme(reduceMotion = true) { Screen() }
+        }
+        android.webkit.WebStorage.getInstance().deleteAllData()
+        CookieManager.getInstance().removeAllCookies {
+            CookieManager.getInstance().flush();sessionReady=true
         }
         startPolling()
     }
@@ -143,6 +148,11 @@ class WebLoginActivity : ComponentActivity() {
                             Text("登录${platform.title}", color = White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                             Text(status, color = if (blocked != null) Rose else Muted, fontSize = 10.sp, lineHeight = 14.sp)
                         }
+                        TextButton(onClick={
+                            android.webkit.WebStorage.getInstance().deleteAllData()
+                            CookieManager.getInstance().removeAllCookies {CookieManager.getInstance().flush();web?.loadUrl(platform.startUrl)}
+                            status="已清除本次网页会话，请登录其他账号；已绑定授权保留"
+                        }) {Text("切换账号",fontSize=11.sp)}
                         if (harvesting) {
                             CircularProgressIndicator(Modifier.size(16.dp), color = Cyan, strokeWidth = 2.dp)
                             Spacer(Modifier.width(8.dp))
@@ -166,7 +176,7 @@ class WebLoginActivity : ComponentActivity() {
                     )
                 }
                 Box(Modifier.weight(1f)) {
-                    AndroidView(
+                    if(sessionReady)AndroidView(
                         modifier = Modifier.fillMaxSize(),
                         factory = { context ->
                             android.widget.FrameLayout(context).apply {
@@ -282,7 +292,7 @@ class WebLoginActivity : ComponentActivity() {
             if (agent == UserAgent.DESKTOP && LoginPlatforms.allows(platform, url)) forceDesktopWidth(view)
             if (blocked == null) {
                 status = if (agent == UserAgent.DESKTOP) {
-                    "请在官方页面登录；看不到登录按钮时左右滑动或双指缩小页面"
+                    "页面已自动适配宽度；请完成登录，也可切换手机版或取消后使用本人授权导入"
                 } else {
                     "请在官方页面完成登录；完成后会自动继续"
                 }

@@ -84,7 +84,7 @@ class MultiGameMigrationTest {
             db.version=3
         }
         repo=SignRepository(context,name)
-        assertEquals(4,repo.readableDatabase.version)
+        assertEquals(5,repo.readableDatabase.version)
         assertEquals(listOf("zzz"),repo.accounts().single().gameIds)
         assertFalse(repo.accounts().single().enabled)
         assertEquals("success",repo.records("2026-11-01").single().status)

@@ -42,7 +42,7 @@ class RetryCompletionTest {
     @Test fun uncertainSubmissionIsTerminalAndNeverAutomaticallyResent()=runBlocking {
         var posts=0;val engine=engine{posts++;SignResult("needs_action","合成不确定提交，请先核对")}
         assertFalse(engine.run().retryPending);expireCooldown();engine.run()
-        assertEquals(1,posts);assertEquals("needs_action",repository.records(SignRepository.day()).single().status)
+        assertEquals(1,posts);assertEquals("uncertain",repository.records(SignRepository.day()).single().status)
     }
     @Test fun pausedAccountsDoNotKeepAutomaticSchedulePending()=runBlocking {
         val engine=engine{SignResult("failed","mock failure")};assertTrue(engine.run().retryPending)

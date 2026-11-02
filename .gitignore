@@ -30,3 +30,6 @@
 **/*.key
 **/*.p12
 **/__pycache__/
+
+!/docs/v070-report.md
+!/docs/v070-audit-and-plan.md

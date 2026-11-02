@@ -74,7 +74,7 @@ class LocalIntegrationTest {
     @Test fun interruptedSubmissionRequiresOfficialCheckAndIsNotRetried() {
         val id=account();val day=SignRepository.day();val t=SignTarget("role|1","test")
         assertTrue(repo.claim(day,id,t));repo.recoverInterrupted()
-        assertEquals("needs_action",repo.records(day).single().status);assertFalse(repo.claim(day,id,t,Long.MAX_VALUE))
+        assertEquals("uncertain",repo.records(day).single().status);assertFalse(repo.claim(day,id,t,Long.MAX_VALUE))
     }
     @Test fun cooldownDailyAttemptLimitAndDeleteCascade() {
         val id=account();val day=SignRepository.day();val t=SignTarget("game|1","test")
@@ -92,13 +92,13 @@ class LocalIntegrationTest {
         LocalSignEngine(repo,secrets,mapOf("miyoushe" to adapter)).run()
         val record=repo.records(SignRepository.day()).single();assertEquals("failed",record.status);assertFalse(record.message.contains("synthetic-secret"))
     }
-    @Test fun pausedAccountsDoNotRunAutomaticallyButExplicitCheckCanRun()=runBlocking {
+    @Test fun pausedAccountsStayPausedForQueuedManualAndAutomaticRunsUntilEnabled()=runBlocking {
         val id=account();repo.enabled(id,false);val calls=AtomicInteger()
         val adapter=object:ProviderAdapter {
             override fun targets(c:JSONObject,persist:()->Unit):List<SignTarget> {calls.incrementAndGet();return emptyList()}
             override fun checkin(c:JSONObject,t:SignTarget,persist:()->Unit)=SignResult("failed","unreachable")
         }
-        val engine=LocalSignEngine(repo,secrets,mapOf("miyoushe" to adapter));engine.run();assertEquals(0,calls.get());engine.run(listOf(id));assertEquals(1,calls.get())
+        val engine=LocalSignEngine(repo,secrets,mapOf("miyoushe" to adapter));engine.run();assertEquals(0,calls.get());engine.run(listOf(id));assertEquals(0,calls.get());repo.enabled(id,true);engine.run(listOf(id));assertEquals(1,calls.get())
     }
     @Test fun networkConstraintAndUniqueQueuePersistAcrossBootRestore() {
         // Actual WorkManager + Android JobScheduler on API 35, with no accounts and no backend.

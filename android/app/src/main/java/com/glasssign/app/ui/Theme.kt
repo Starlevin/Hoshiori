@@ -214,6 +214,6 @@ fun GlassSignTheme(reduceMotion: Boolean, content: @Composable () -> Unit) {
     val density=LocalDensity.current
     val scaled=remember(density,settings.scaleEnabled,settings.textScale){Density(density.density,density.fontScale*if(settings.scaleEnabled)settings.textScale else 1f)}
     CompositionLocalProvider(LocalReduceMotion provides reduceMotion,LocalAppearance provides settings,LocalAppearanceController provides controller,LocalDensity provides scaled) {
-        MaterialTheme(colorScheme=scheme,typography=typography,content=content)
+        MaterialTheme(colorScheme=scheme,typography=typography){CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides scheme.onBackground,content=content)}
     }
 }

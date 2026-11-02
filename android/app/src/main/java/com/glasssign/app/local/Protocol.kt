@@ -16,9 +16,10 @@ import javax.crypto.spec.SecretKeySpec
 data class SignTarget(val id: String, val name: String, val serverId: String? = null)
 data class SignResult(val status: String, val message: String)
 class SignError(val kind: String, message: String) : Exception(message) {
-    val status get() = when (kind) { "auth", "captcha", "config", "uncertain" -> "needs_action"; "network" -> "waiting_network"; else -> "failed" }
+    val status get() = when (kind) { "auth", "captcha", "config" -> "needs_action"; "uncertain" -> "uncertain"; "network" -> "waiting_network"; else -> "failed" }
 }
 interface ProviderAdapter {
+    fun queryStatus(c:JSONObject,t:SignTarget,persist:()->Unit):SignResult=SignResult("uncertain","该平台尚无已验证的独立查询接口，请在官方应用核对；未重新提交")
     fun targets(c: JSONObject, persist: () -> Unit): List<SignTarget>
     fun checkin(c: JSONObject, t: SignTarget, persist: () -> Unit): SignResult
 }
@@ -74,9 +75,9 @@ class OfficialTransport : Transport {
                     in 500..599 -> throw SignError(if (method == "POST") "uncertain" else "network", if (method == "POST") "提交结果未确认，请先在官方应用核对" else "社区暂不可用，等待网络恢复后重试")
                     !in 200..299 -> throw SignError("protocol", "社区接口状态异常")
                 }
-                val source = reply.body?.source() ?: throw SignError("protocol", "社区返回空响应")
-                if (source.request(2L * 1024 * 1024 + 1)) throw SignError("protocol", "社区响应过大")
-                return try { JSONObject(source.readUtf8()) } catch (_: Exception) { throw SignError("protocol", "社区响应格式异常") }
+                val source = reply.body?.source() ?: throw SignError(if(method=="POST")"uncertain" else "protocol", "社区返回空响应，结果待核对")
+                if (source.request(2L * 1024 * 1024 + 1)) throw SignError(if(method=="POST")"uncertain" else "protocol", "社区响应过大，结果待核对")
+                return try { JSONObject(source.readUtf8()) } catch (_: Exception) { throw SignError(if(method=="POST")"uncertain" else "protocol", "社区响应格式异常，结果待核对") }
             }
         } catch (_: IOException) { throw SignError(if (method == "POST") "uncertain" else "network", if (method == "POST") "提交时连接中断，结果不确定；请先在官方应用核对" else "联网失败，等待网络恢复后重试") }
     }

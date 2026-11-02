@@ -35,7 +35,7 @@ class ProviderTest {
     }
     @Test fun miyousheDoesNotClaimSuccessWithoutFinalConfirmation() {
         val h=Fake{if(it.url.endsWith("/sign"))JSONObject("""{"retcode":0}""") else JSONObject("""{"retcode":0,"data":{"is_sign":false}}""")}
-        assertEquals("needs_action",MiyousheAdapter(h).checkin(JSONObject("""{"cookie":"fixture-cookie"}"""),SignTarget("genshin|1|cn_gf01","test")){}.status)
+        assertEquals("uncertain",MiyousheAdapter(h).checkin(JSONObject("""{"cookie":"fixture-cookie"}"""),SignTarget("genshin|1|cn_gf01","test")){}.status)
     }
     @Test fun miyousheCaptchaStopsBeforeSign() {
         val h=Fake{JSONObject("""{"retcode":1034}""")}

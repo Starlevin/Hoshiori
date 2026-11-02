@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.dp
 /** Independently implemented theme preferences. FlClash feature mapping is documented in docs. */
 @Immutable
 data class AppearanceSettings(
-    val mode:String="system",val pureBlack:Boolean=false,val colorStyle:String="vivid",
+    val glassMode:String="standard",val mode:String="system",val pureBlack:Boolean=false,val colorStyle:String="vivid",
     val seed:Int=0xFF4263C7.toInt(),val dynamicColor:Boolean=false,
     val surfaceEffect:String="none",val navigationTint:Boolean=false,
     val scaleEnabled:Boolean=false,val textScale:Float=1f,val font:String="system",val customColors:List<Int> = emptyList(),
@@ -31,6 +31,7 @@ data class AppearanceSettings(
 class AppearanceController(context:Context) {
     private val preferences=context.applicationContext.getSharedPreferences("appearance_v1",Context.MODE_PRIVATE)
     fun read()=AppearanceSettings(
+        glassMode=preferences.getString("glass_mode","standard").orEmpty().takeIf{it in listOf("standard","light","off")} ?: "standard",
         mode=preferences.getString("mode","system").orEmpty().takeIf{it in listOf("system","light","dark")} ?: "system",
         pureBlack=preferences.getBoolean("pure_black",false),
         colorStyle=preferences.getString("color_style","vivid").orEmpty().takeIf{it in listOf("vivid","tinted","soft","monochrome")} ?: "vivid",
@@ -42,7 +43,7 @@ class AppearanceController(context:Context) {
         customColors=preferences.getString("custom_colors","").orEmpty().split(',').mapNotNull{it.toLongOrNull(16)?.toInt()}.distinct().takeLast(8),
     )
     fun save(value:AppearanceSettings) {
-        preferences.edit().putString("mode",value.mode).putBoolean("pure_black",value.pureBlack)
+        preferences.edit().putString("glass_mode",value.glassMode).putString("mode",value.mode).putBoolean("pure_black",value.pureBlack)
             .putString("color_style",value.colorStyle).putInt("seed",value.seed).putBoolean("dynamic",value.dynamicColor)
             .putString("surface_effect",value.surfaceEffect).putBoolean("navigation_tint",value.navigationTint)
             .putBoolean("scale_enabled",value.scaleEnabled).putFloat("text_scale",value.textScale.coerceIn(.85f,1.4f))
@@ -94,9 +95,9 @@ internal fun appearanceScheme(settings:AppearanceSettings,dark:Boolean,wallpaper
     val secondary=if(monochrome)primary else if(wallpaper!=null)wallpaper.secondary else lerp(primary,if(dark)Color(0xFFC8A6E4) else Color(0xFF79559B),.35f)
     val base=if(dark)darkColorScheme() else lightColorScheme()
     return base.copy(
-        primary=primary,onPrimary=if(primary.luminance()>.45f)Color(0xFF10131B) else Color.White,
+        primary=primary,onPrimary=readableOn(primary),
         primaryContainer=lerp(surface,primary,if(dark).2f else .12f),onPrimaryContainer=text,
-        secondary=secondary,onSecondary=if(dark)Color(0xFF14151B) else Color.White,
+        secondary=secondary,onSecondary=readableOn(secondary),
         secondaryContainer=lerp(surface,secondary,.14f),onSecondaryContainer=text,
         tertiary=if(dark)Color(0xFF7ED6B0) else Color(0xFF216B4D),
         background=background,onBackground=text,surface=surface,onSurface=text,
@@ -120,6 +121,9 @@ fun AppearanceDialog(onDismiss:()->Unit) {
     var custom by remember(settings.seed){mutableStateOf("#"+settings.seed.toUInt().toString(16).takeLast(6).uppercase())}
     var customError by remember {mutableStateOf<String?>(null)}
     GlassDialog(title="外观与主题",subtitle="即时预览 · 只影响本机界面",onDismiss=onDismiss) {
+        Text("液态玻璃",style=MaterialTheme.typography.titleMedium)
+        ChoiceRows(listOf("standard" to "标准","light" to "轻量","off" to "关闭"),settings.glassMode){update(settings.copy(glassMode=it))}
+        Text("标准使用真实页面背景采样；低内存、省电及辅助功能模式自动回退。",style=MaterialTheme.typography.bodySmall,color=Muted)
         Text("主题模式",style=MaterialTheme.typography.titleMedium)
         ChoiceRows(listOf("system" to "跟随系统","light" to "浅色","dark" to "深色"),settings.mode){update(settings.copy(mode=it))}
         SettingSwitch("纯黑背景","在深色模式下使用 OLED 黑色背景",settings.pureBlack){update(settings.copy(pureBlack=it))}
@@ -196,4 +200,13 @@ private fun SettingSwitch(title:String,description:String,checked:Boolean,onChec
         Column(Modifier.weight(1f)){Text(title,style=MaterialTheme.typography.bodyLarge);Text(description,style=MaterialTheme.typography.bodySmall,color=Muted)}
         Switch(checked=checked,onCheckedChange=onChecked)
     }
+}
+
+
+/** Choose by measured contrast, not a brightness heuristic that fails on pastel dark accents. */
+internal fun readableOn(background:Color):Color {
+    val ink=Color(0xFF10131B)
+    val light=1.05f/(background.luminance()+.05f)
+    val dark=(background.luminance()+.05f)/(ink.luminance()+.05f)
+    return if(dark>=light)ink else Color.White
 }

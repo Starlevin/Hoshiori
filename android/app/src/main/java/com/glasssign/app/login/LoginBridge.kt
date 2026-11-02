@@ -22,8 +22,14 @@ data class PendingLogin(
     val availableGameIds: List<String> = emptyList(),
     val selectedGameIds: Set<String> = availableGameIds.toSet(),
     val existingAccount: Boolean = false,
+    val roleChoices:List<com.glasssign.app.data.RoleChoice> = emptyList(),
+    val selectedRoleIds:Set<String> = roleChoices.map{it.targetId}.toSet(),
+    val providerUserId:String="",
+    val autoSignEnabled:Boolean=true,
+    val confirming:Boolean=false,
+
 ) {
-    val ready: Boolean get() = roles.isNotEmpty() && (availableGameIds.isEmpty() || selectedGameIds.isNotEmpty())
+    val ready: Boolean get() = roles.isNotEmpty() && (availableGameIds.isEmpty() || selectedGameIds.isNotEmpty()) && (roleChoices.isEmpty() || roleChoices.any{it.gameId in selectedGameIds && it.targetId in selectedRoleIds})
 }
 
 object LoginBridge {

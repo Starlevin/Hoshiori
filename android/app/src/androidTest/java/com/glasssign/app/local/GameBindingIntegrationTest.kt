@@ -62,6 +62,6 @@ class GameBindingIntegrationTest {
         repository=SignRepository(context,dbName)
         assertEquals("",repository.accounts().single().gameId)
         assertEquals("success",repository.records(SignRepository.day()).single().status)
-        assertEquals(4,repository.readableDatabase.version)
+        assertEquals(5,repository.readableDatabase.version)
     }
 }

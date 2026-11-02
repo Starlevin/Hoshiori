@@ -1,5 +1,6 @@
 package com.glasssign.app.local
 
+import com.glasssign.app.data.present
 import android.Manifest
 import android.app.Application
 import android.app.NotificationChannel
@@ -61,8 +62,9 @@ class SignWorker(context:Context,params:WorkerParameters):CoroutineWorker(contex
         val s=LocalServices.get(applicationContext)
         val scheduled=inputData.getBoolean("scheduled",false)
         if(scheduled&&!SignScheduler(applicationContext).due())return@withContext Result.success()
+        s.prefs.edit().putString("last_started",SignRepository.now()).apply()
         val summary=try {
-            kotlinx.coroutines.withTimeout(180_000L) { s.engine.run(inputData.getStringArray("accounts")?.toList()) }
+            kotlinx.coroutines.withTimeout(180_000L) { s.engine.run(inputData.getStringArray("accounts")?.toList(),scheduled) }
         } catch (_:kotlinx.coroutines.TimeoutCancellationException) {
             LocalSignEngine.mutex.withLock { s.repository.recoverInterrupted() }
             s.prefs.edit().putString("last_finished",SignRepository.now()).putString("last_worker_error","任务等待超时，请查看记录；结果不确定的任务不会自动重发").apply()
@@ -80,16 +82,16 @@ fun notifyResult(context:Context,summary:RunSummary) {
     manager.createNotificationChannel(NotificationChannel("local_results_v4","本地签到结果",NotificationManager.IMPORTANCE_DEFAULT))
     if(Build.VERSION.SDK_INT>=33&&context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)return
     val records=LocalServices.get(context).repository.records(summary.day)
-    val ok=records.count{it.status in setOf("success","already")};val action=records.count{it.status=="needs_action"};val failed=records.count{it.status=="failed"}
+    val ok=records.count{present(it).group=="success"};val action=records.count{present(it).group=="attention"};val uncertain=records.count{present(it).group in setOf("uncertain","submitted")}
     val notification=NotificationCompat.Builder(context,"local_results_v4").setSmallIcon(android.R.drawable.ic_menu_agenda).setContentTitle("星栞 · 本地执行记录")
-        .setContentText("成功/已签 $ok 项，需操作 $action 项，失败 $failed 项"+if(summary.waiting)"，待网络恢复" else "").setAutoCancel(true).build()
+        .setContentText("已确认 $ok 项，待确认 $uncertain 项，需处理 $action 项"+if(summary.waiting)"，待网络恢复" else "").setAutoCancel(true).build()
     manager.notify(4,notification)
 }
 class BootReceiver:BroadcastReceiver() {
     override fun onReceive(context:Context,intent:Intent) {
-        if(intent.action==Intent.ACTION_BOOT_COMPLETED || intent.action==Intent.ACTION_MY_PACKAGE_REPLACED)SignScheduler(context).restore()
+        if(intent.action==Intent.ACTION_BOOT_COMPLETED || intent.action==Intent.ACTION_MY_PACKAGE_REPLACED)runCatching{SignScheduler(context).restore()}.onFailure{Bootstrap.failed=true}
     }
 }
 class GlassSignApplication:Application() {
-    override fun onCreate() {super.onCreate();SignScheduler(this).restore()}
+    override fun onCreate() {super.onCreate();runCatching{SignScheduler(this).restore()}.onFailure{Bootstrap.failed=true}}
 }

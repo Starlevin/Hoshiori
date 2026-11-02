@@ -15,6 +15,9 @@ data class Account(
     val bindingPending: Boolean = false,
     val gameId: String = "",
     val gameIds: List<String> = if(gameId.isEmpty()) emptyList() else listOf(gameId),
+    val providerUserId:String="",
+    val roleScope:Boolean=false,
+    val autoSignEnabled:Boolean=true,
 )
 
 /** Result of the read-only authorization probe. Never claims a sign-in happened. */
@@ -33,6 +36,8 @@ data class CheckRecord(
     val message: String,
     val attempts: Int,
     val updatedAt: String,
+    val startedAt:String="",
+    val resultSource:String="legacy",
 )
 
 data class Overview(
@@ -47,6 +52,7 @@ data class Overview(
     val engineRunning: Boolean,
     val lastFinishedAt: String?,
     val lastTrigger: String?,
+    val lastStartedAt:String?=null,
 )
 
 data class JobSnapshot(
@@ -181,3 +187,17 @@ fun parseDayRecords(json: JSONObject): DayRecords = DayRecords(
     records = parseRecords(json.arr("records")),
     summary = parseSummary(json.obj("summary")),
 )
+
+
+data class GameBinding(val accountId:String,val targetId:String,val gameId:String,val name:String,val enabled:Boolean=true,val autoSignEnabled:Boolean=true)
+data class RoleChoice(val targetId:String,val gameId:String,val name:String)
+fun maskedIdentity(value:String):String=if(value.isBlank())"身份未提供" else if(value.length<5)"••"+value.takeLast(1) else value.take(2)+"••••"+value.takeLast(2)
+
+
+data class BindingSelection(val games:Set<String>,val roles:Set<String>,val autoSign:Boolean)
+fun initialBindingSelection(original:Account?,bindings:List<GameBinding>,choices:List<RoleChoice>):BindingSelection {
+    val available=choices.map{it.gameId}.toSet()
+    val games=original?.gameIds?.toSet()?.intersect(available) ?: available
+    val known=if(original==null)choices.map{it.targetId}.toSet() else bindings.filter{it.accountId==original.id}.map{it.targetId}.toSet()
+    return BindingSelection(games,choices.filter{it.gameId in games&&it.targetId in known}.map{it.targetId}.toSet(),original?.autoSignEnabled ?: true)
+}

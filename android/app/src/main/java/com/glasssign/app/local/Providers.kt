@@ -44,6 +44,12 @@ class MiyousheAdapter(private val http: Transport) : ProviderAdapter {
         }
         return items.distinctBy { it.id }.ifEmpty { listOf(SignTarget("no-roles","米游社角色绑定")) }
     }
+    override fun queryStatus(c:JSONObject,t:SignTarget,persist:()->Unit):SignResult {
+        val p=t.id.split('|');val g=games[p[0]] ?: return SignResult("uncertain","未识别游戏，请在官方应用核对")
+        if(p.size!=3)return SignResult("uncertain","角色不完整，未重新提交")
+        val r=request(c,g,"GET",g.base+g.path+"/info",persist,mapOf("lang" to "zh-cn","act_id" to g.act,"region" to p[2],"uid" to p[1]));check(r)
+        return if(r.optJSONObject("data")?.opt("is_sign")==true)SignResult("already","只读官方状态确认已签到") else SignResult("uncertain","官方暂未确认已签；先前提交仍待核对，未重新提交")
+    }
     override fun checkin(c:JSONObject,t:SignTarget,persist:()->Unit):SignResult {
         val p=t.id.split('|');val g=games[p[0]]
         if(p.size!=3 || g==null) return SignResult("needs_action","未发现有效角色，请在官方应用绑定")
@@ -57,8 +63,8 @@ class MiyousheAdapter(private val http: Transport) : ProviderAdapter {
         if(r.optJSONObject("data")?.optInt("success")==1)return SignResult("needs_action","请在米游社完成人机验证")
         val outcome=result(r.optString("retcode"),already=setOf("-5003"),auth=setOf("-100"),captcha=setOf("1034"))
         if(outcome.status!="success")return outcome
-        val verify=request(c,g,"GET",g.base+g.path+"/info",persist,query)
-        return if(verify.optString("retcode")=="0"&&verify.optJSONObject("data")?.optBoolean("is_sign")==true)SignResult("success","签到成功，官方状态已确认") else SignResult("needs_action","提交后状态未确认，请在官方应用核对后再操作")
+        val verify=try{request(c,g,"GET",g.base+g.path+"/info",persist,query)}catch(_:Exception){return SignResult("uncertain","提交已接受，但后续官方状态查询未完成；请先核对，未重新提交")}
+        return if(verify.optString("retcode")=="0"&&verify.optJSONObject("data")?.optBoolean("is_sign")==true)SignResult("success","签到成功，官方状态已确认") else SignResult("uncertain","提交后状态未确认，请在官方应用核对后再操作")
     }
 }
 
@@ -139,6 +145,12 @@ class TaggedAdapter(private val http:Transport) : ProviderAdapter {
         }
         if(items.none{it.id.startsWith("game|")})items.add(SignTarget("no-roles","塔吉多游戏角色"))
         return items.distinctBy{it.id}
+    }
+    override fun queryStatus(c:JSONObject,t:SignTarget,persist:()->Unit):SignResult {
+        val p=t.id.split('|')
+        if(p.size!=3||p[0]!="game")return SignResult("uncertain","社区任务请在官方应用核对，未重新提交")
+        val r=http.call("GET",base+"/apihub/awapi/signin/state",headers(c,token(c,persist)),query=mapOf("gameId" to p[1]))
+        return if(r.optString("code")=="0"&&r.optJSONObject("data")?.opt("todaySign")==true)SignResult("already","只读官方状态确认已签到") else SignResult("uncertain","官方暂未确认已签；未重新提交，请核对游戏状态")
     }
     override fun checkin(c:JSONObject,t:SignTarget,persist:()->Unit):SignResult {
         val h=headers(c,token(c,persist));val p=t.id.split('|')
