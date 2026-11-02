@@ -95,6 +95,32 @@ class SessionHarvestTest {
         }
     }
 
+    @Test fun sklandOfficialDeviceCacheUsesOnlyTheIdField() {
+        val cache = """{"id":"device-from-web","timestamp":1793574000000}"""
+        for (value in listOf(cache, JSONObject.quote(cache), "\"device-from-web\"")) {
+            val webStorage = storage("cred", "sign", value)
+            val credential = ready("skland", storage = webStorage)
+            assertEquals("device-from-web", credential.getString("dId"))
+            assertEquals("device-from-web", SessionHarvest.sklandSession(webStorage)?.dId)
+        }
+    }
+
+    @Test fun sklandMalformedDeviceCacheCannotBecomeASignedSession() {
+        for (value in listOf("{}", "{broken", "{\"id\":null}", "{\"id\":42}", "{\"id\":{}}", "{\"id\":\"  \"}", "[]", "null")) {
+            val webStorage = storage("cred", "sign", value)
+            missing("skland", storage = webStorage)
+            assertNull(SessionHarvest.sklandSession(webStorage))
+        }
+    }
+
+    @Test fun sklandDeviceCacheTimestampDoesNotChangeSessionIdentity() {
+        val first = SessionHarvest.sklandSession(storage("c", "s", """{"id":"d","timestamp":1}"""))
+        val next = SessionHarvest.sklandSession(storage("c", "s", """{"id":"d","timestamp":2}"""))
+        val continuity = SessionHarvest.SklandContinuity()
+        assertNull(continuity.accept(first))
+        assertEquals(first, continuity.accept(next))
+    }
+
     @Test fun sklandWithoutSignTokenIsNotSuccess() = missing("skland", storage = mapOf("SK_OAUTH_CRED_KEY" to "cred"))
 
     @Test fun kurobbsTokenFromCookie() {

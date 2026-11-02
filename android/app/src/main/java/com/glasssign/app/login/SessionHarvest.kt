@@ -93,7 +93,7 @@ object SessionHarvest {
     fun sklandSession(storage: Map<String, String>): SklandSession? {
         val cred = unwrap(storage["SK_OAUTH_CRED_KEY"])
         val signToken = unwrap(storage["SK_TOKEN_CACHE_KEY"])
-        val dId = unwrap(storage["SK_SHUMEI_DEVICE_ID_KEY"])
+        val dId = sklandDeviceId(storage["SK_SHUMEI_DEVICE_ID_KEY"])
         if (cred.isEmpty() || signToken.isEmpty() || dId.isEmpty()) return null
         return SklandSession(cred, signToken, dId)
     }
@@ -139,7 +139,7 @@ object SessionHarvest {
         // The signed request context must carry the device id the official site issued together with
         // this cred. Inventing one (a random UUID) would sign with an identity the platform never saw,
         // so an absent official id is reported as "not ready" instead of being substituted.
-        val platformDevice = unwrap(storage["SK_SHUMEI_DEVICE_ID_KEY"])
+        val platformDevice = sklandDeviceId(storage["SK_SHUMEI_DEVICE_ID_KEY"])
         if (cred.isEmpty()) return HarvestResult.Incomplete("官方页面尚未返回森空岛登录凭据，请确认已登录成功")
         if (signToken.isEmpty()) return HarvestResult.Incomplete("官方页面尚未完成签名令牌初始化，请稍候重试")
         if (platformDevice.isEmpty()) return HarvestResult.Incomplete("官方页面尚未提供森空岛设备标识，签名环境未就绪；请稍候或重新打开登录页")
@@ -152,6 +152,18 @@ object SessionHarvest {
                 .put("communityCheckin", true)
                 .put("source", "web-login")
         )
+    }
+
+    /** The official site caches {id, timestamp}; only id belongs in the signed header. */
+    private fun sklandDeviceId(value: String?): String {
+        val raw = unwrap(value).trim()
+        if (raw.startsWith("{")) {
+            return runCatching { (JSONObject(raw).opt("id") as? String)?.trim().orEmpty() }
+                .getOrDefault("")
+        }
+        // Retain compatibility with older pages storing a raw or JSON-quoted identifier.
+        if (raw.startsWith("[") || raw == "null") return ""
+        return raw
     }
 
     private fun kurobbs(jar: Map<String, String>, storage: Map<String, String>): HarvestResult {
