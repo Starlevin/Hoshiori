@@ -30,3 +30,4 @@
 **/*.key
 **/*.p12
 **/__pycache__/
+!/docs/PLUGIN_ARCHITECTURE_V1.md
