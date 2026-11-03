@@ -175,9 +175,14 @@ internal fun appearanceScheme(settings:AppearanceSettings,dark:Boolean,wallpaper
         if(proportion<4.6f)primary=lerp(primary,if(dark)Color.White else Color.Black,.13f)
     }
     val tint=when(settings.colorStyle){"tinted"->.085f;"soft"->.025f;else->0f}
+    // True OLED: when pureBlack is on in dark mode, background AND surfaces are pure
+    // black (not the old 0xFF101010 grey), so OLED pixels actually turn off. The page
+    // gradient is flattened by the same change (see pageGradientBrush): its two ends
+    // become black once primaryContainer/secondaryContainer are black. Only the accent
+    // (primary/secondary, selected state, buttons, accent text) keeps the user colour.
     val black=dark&&settings.pureBlack
     val background=if(black)Color.Black else if(monochrome)neutral else lerp(neutral,primary,tint)
-    val surface=if(black)Color(0xFF101010) else if(monochrome)paper else lerp(paper,primary,tint*.65f)
+    val surface=if(black)Color.Black else if(monochrome)paper else lerp(paper,primary,tint*.65f)
     // Page title and card body must agree on which side is darker: one ink for background AND surface.
     val onSurface=readableOnIn(listOf(surface,background))
     // Secondary text (`Muted`) is bodySmall 11sp/17sp, i.e. normal-size text: AA needs 4.5:1 against the
@@ -193,15 +198,16 @@ internal fun appearanceScheme(settings:AppearanceSettings,dark:Boolean,wallpaper
     val onError=repairContrast(readableOn(error),away,listOf(error),4.5f)
     return base.copy(
         primary=primary,onPrimary=readableOn(primary),
-        primaryContainer=lerp(surface,primary,if(dark).2f else .12f),onPrimaryContainer=onSurface,
+        primaryContainer=if(black)Color.Black else lerp(surface,primary,if(dark).2f else .12f),onPrimaryContainer=onSurface,
         secondary=secondary,onSecondary=readableOn(secondary),
-        secondaryContainer=lerp(surface,secondary,.14f),onSecondaryContainer=onSurface,
+        secondaryContainer=if(black)Color.Black else lerp(surface,secondary,.14f),onSecondaryContainer=onSurface,
         tertiary=if(dark)Color(0xFF7ED6B0) else Color(0xFF216B4D),
         background=background,onBackground=onSurface,surface=surface,onSurface=onSurface,
-        surfaceVariant=lerp(surface,onSurface,.045f),onSurfaceVariant=variant,
+        surfaceVariant=if(black)Color.Black else lerp(surface,onSurface,.045f),onSurfaceVariant=variant,
         surfaceContainerLowest=background,surfaceContainerLow=surface,
-        surfaceContainer=lerp(surface,onSurface,.025f),surfaceContainerHigh=lerp(surface,onSurface,.055f),
-        surfaceContainerHighest=lerp(surface,onSurface,.08f),
+        surfaceContainer=if(black)Color.Black else lerp(surface,onSurface,.025f),
+        surfaceContainerHigh=if(black)Color.Black else lerp(surface,onSurface,.055f),
+        surfaceContainerHighest=if(black)Color.Black else lerp(surface,onSurface,.08f),
         outline=if(dark)Color(0xFF778090) else Color(0xFF747E8F),
         outlineVariant=if(dark)Color(0xFF363B46) else Color(0xFFDCE0EA),
         surfaceTint=primary,
@@ -229,7 +235,7 @@ fun AppearanceDialog(onDismiss:()->Unit) {
         Text("标准使用真实页面背景采样；低内存、省电及辅助功能模式自动回退。",style=MaterialTheme.typography.bodySmall,color=Muted)
         Text("主题模式",style=MaterialTheme.typography.titleMedium)
         ChoiceRows(listOf("system" to "跟随系统","light" to "浅色","dark" to "深色"),settings.mode){update(settings.copy(mode=it))}
-        SettingSwitch("纯黑背景","在深色模式下使用 OLED 黑色背景",settings.pureBlack){update(settings.copy(pureBlack=it))}
+        SettingSwitch("OLED 纯黑","深色下背景与卡片均为纯黑，页面渐变压平，只有选中、按钮与点缀文字保留主题色",settings.pureBlack){update(settings.copy(pureBlack=it))}
         DividerLine(Modifier.padding(vertical=12.dp))
         Text("主题色",style=MaterialTheme.typography.titleMedium)
         if(Build.VERSION.SDK_INT>=31)SettingSwitch("壁纸动态取色","从 Android 系统配色中选择主色",settings.dynamicColor){update(settings.copy(dynamicColor=it))}
@@ -264,6 +270,36 @@ fun AppearanceDialog(onDismiss:()->Unit) {
             },modifier=Modifier.heightIn(min=48.dp).padding(top=12.dp)){Text("应用")}
         }
         customError?.let{Text(it,color=MaterialTheme.colorScheme.error)}
+        // Real colour picker: RGB sliders with a live preview, not only a hex field.
+        // Default seed is unchanged (blue-purple 0xFF4263C7); the seven presets below,
+        // including teal 0xFF19757A, are kept as selectable options, and a picked colour
+        // is added to the recent-custom list exactly like a hex-typed one.
+        Text("颜色选择器（拖动取色）",style=MaterialTheme.typography.bodySmall,color=Muted)
+        var pickerRed by remember(settings.seed){mutableStateOf((settings.seed shr 16) and 0xFF)}
+        var pickerGreen by remember(settings.seed){mutableStateOf((settings.seed shr 8) and 0xFF)}
+        var pickerBlue by remember(settings.seed){mutableStateOf(settings.seed and 0xFF)}
+        val pickerColor=Color(pickerRed,pickerGreen,pickerBlue)
+        Row(Modifier.fillMaxWidth().padding(vertical=8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+            Box(Modifier.size(40.dp).background(pickerColor,CircleShape).border(1.dp,MaterialTheme.colorScheme.outlineVariant,CircleShape))
+            Text("#%02X%02X%02X".format(pickerRed,pickerGreen,pickerBlue),style=MaterialTheme.typography.bodyLarge)
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick={update(settings.copy(seed=(0xFF000000 or (pickerRed shl 16) or (pickerGreen shl 8) or pickerBlue).toInt(),dynamicColor=false,customColors=(settings.customColors+(0xFF000000 or (pickerRed shl 16) or (pickerGreen shl 8) or pickerBlue).toInt()).distinct().takeLast(8)))},modifier=Modifier.heightIn(min=48.dp)){Text("应用此颜色")}
+        }
+        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+            Text("红",style=MaterialTheme.typography.bodyMedium,modifier=Modifier.width(20.dp))
+            Slider(value=pickerRed.toFloat(),onValueChange={pickerRed=it.toInt()},valueRange=0f..255f,modifier=Modifier.weight(1f))
+            Text(pickerRed.toString(),style=MaterialTheme.typography.bodyMedium,modifier=Modifier.width(36.dp))
+        }
+        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+            Text("绿",style=MaterialTheme.typography.bodyMedium,modifier=Modifier.width(20.dp))
+            Slider(value=pickerGreen.toFloat(),onValueChange={pickerGreen=it.toInt()},valueRange=0f..255f,modifier=Modifier.weight(1f))
+            Text(pickerGreen.toString(),style=MaterialTheme.typography.bodyMedium,modifier=Modifier.width(36.dp))
+        }
+        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+            Text("蓝",style=MaterialTheme.typography.bodyMedium,modifier=Modifier.width(20.dp))
+            Slider(value=pickerBlue.toFloat(),onValueChange={pickerBlue=it.toInt()},valueRange=0f..255f,modifier=Modifier.weight(1f))
+            Text(pickerBlue.toString(),style=MaterialTheme.typography.bodyMedium,modifier=Modifier.width(36.dp))
+        }
         Spacer(Modifier.height(12.dp))
         Text("配色风格",style=MaterialTheme.typography.titleMedium)
         ChoiceRows(listOf("vivid" to "鲜明","tinted" to "色调","soft" to "柔和","monochrome" to "单色"),settings.colorStyle){update(settings.copy(colorStyle=it))}
