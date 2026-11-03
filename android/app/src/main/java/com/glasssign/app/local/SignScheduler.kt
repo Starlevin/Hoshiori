@@ -22,6 +22,15 @@ import java.util.concurrent.TimeUnit
 object SchedulePolicy {
     fun due(now:ZonedDateTime,enabled:Boolean,time:String,lastDay:String):Boolean = enabled && now.withZoneSameInstant(SignRepository.TZ).let { it.toLocalTime()>=LocalTime.parse(time) && it.toLocalDate().toString()!=lastDay }
     fun canCompleteDay(executedDay:String,today:String,waiting:Boolean,retryPending:Boolean):Boolean = executedDay==today && !waiting && !retryPending
+    /**
+     * Whether the worker should ask WorkManager to retry the whole run.
+     *
+     * Only an explicit, transient condition qualifies: the run was waiting for the network (already a
+     * self-describing transient state), or a stored row was written with `retryable=true`. A plain `failed` row is
+     * NOT a retry reason, and no HTTP 402 / rate-limit / unknown-status row is ever retried automatically.
+     */
+    fun shouldRetryRun(waiting:Boolean,retryPending:Boolean,attempt:Int,maxAttempts:Int=3):Boolean =
+        attempt<maxAttempts && (waiting||retryPending)
 }
 class SignScheduler(private val context:Context) {
     companion object { const val RUN="glasssign-local-run-v4";const val TICK="glasssign-local-plan-v4" }
@@ -70,11 +79,12 @@ class SignWorker(context:Context,params:WorkerParameters):CoroutineWorker(contex
             s.prefs.edit().putString("last_finished",SignRepository.now()).putString("last_worker_error","任务等待超时，请查看记录；结果不确定的任务不会自动重发").apply()
             return@withContext Result.failure()
         }
-        s.prefs.edit().putString("last_finished",SignRepository.now()).putString("last_trigger",if(scheduled)"scheduled" else "manual").remove("last_worker_error").putString("last_worker_status","success").apply()
+        s.prefs.edit().putString("last_finished",SignRepository.now()).putString("last_trigger",if(scheduled)"scheduled" else "manual").remove("last_worker_error").putString("last_worker_status","success").putString("last_execution_id",summary.executionId).apply()
         if(scheduled&&SchedulePolicy.canCompleteDay(summary.day,SignRepository.day(),summary.waiting,summary.retryPending))
             s.prefs.edit().putString("last_scheduled_day",summary.day).commit()
         notifyResult(applicationContext,summary)
-        if(summary.waiting&&runAttemptCount<3)Result.retry() else Result.success()
+        // KEEP + mutex are preserved: the worker never enqueues a second chain; it only asks for its own retry.
+        if(SchedulePolicy.shouldRetryRun(summary.waiting,summary.retryPending,runAttemptCount))Result.retry() else Result.success()
     }
 }
 fun notifyResult(context:Context,summary:RunSummary) {
@@ -82,9 +92,23 @@ fun notifyResult(context:Context,summary:RunSummary) {
     manager.createNotificationChannel(NotificationChannel("local_results_v4","本地签到结果",NotificationManager.IMPORTANCE_DEFAULT))
     if(Build.VERSION.SDK_INT>=33&&context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)return
     val records=LocalServices.get(context).repository.records(summary.day)
-    val ok=records.count{present(it).group=="success"};val action=records.count{present(it).group=="attention"};val uncertain=records.count{present(it).group in setOf("uncertain","submitted")}
+    // Same semantic mapping as the home page: only an official confirmation counts as done, and an accepted
+    // submission is reported as "waiting for confirmation", never as a success.
+    val states=records.filter{it.targetId!="discovery"}.map{com.glasssign.app.data.present(it)}
+    val ok=states.count{it.group=="success"}
+    val awaiting=states.count{it.state==com.glasssign.app.data.SignState.ACCEPTED}
+    val unknown=states.count{it.state==com.glasssign.app.data.SignState.UNKNOWN}
+    val action=states.count{it.state==com.glasssign.app.data.SignState.AUTH_REQUIRED||it.state==com.glasssign.app.data.SignState.FAILED}
+    val text=buildString{
+        append("已确认 ").append(ok).append(" 项")
+        if(awaiting>0)append("，等待确认 ").append(awaiting).append(" 项")
+        if(unknown>0)append("，未知 ").append(unknown).append(" 项")
+        if(action>0)append("，需处理 ").append(action).append(" 项")
+        if(summary.waiting)append("，待网络恢复")
+        if(summary.noOp)append("；今日已完成，本次未重复请求")
+    }
     val notification=NotificationCompat.Builder(context,"local_results_v4").setSmallIcon(android.R.drawable.ic_menu_agenda).setContentTitle("星栞 · 本地执行记录")
-        .setContentText("已确认 $ok 项，待确认 $uncertain 项，需处理 $action 项"+if(summary.waiting)"，待网络恢复" else "").setAutoCancel(true).build()
+        .setContentText(text).setAutoCancel(true).build()
     manager.notify(4,notification)
 }
 class BootReceiver:BroadcastReceiver() {

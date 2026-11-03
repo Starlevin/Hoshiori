@@ -147,7 +147,41 @@ org.jetbrains:annotations:26.1.0
 - `.gitignore` 把 `/docs/*` 整体排除，只逐个 `!` 放行 `v070-report.md` 等。本文件 `docs/glass-research-v076.md` 因此**当前不会被 git 跟踪**（未修改 `.gitignore`，那是根代理的范围）。若要把溯源证据纳入公开快照，需追加 `!/docs/glass-research-v076.md`。
 - 已随 APK 分发的许可文件不受影响：`android/app/src/main/assets/licenses/backdrop-apache-2.0.txt` 与 `android/app/src/main/assets/NOTICE-backdrop.txt` 在 `/android/` 白名单内，会被跟踪。
 
-## 9. 参考
+## 9. v0.7.7 P1：Dock 尺寸/内边距实测化与描边收敛
+
+本轮**只改** `ui/LiquidDock.kt`、`ui/HoshioriScreen.kt` 和两个新增纯 JVM 测试；未改 data/Models/RecordPresentation/Theme/Gradle/Git，未编译、未上机、未做 FPS 测量。
+
+### 9.1 Dock 实际占位改为实测回传
+
+固定 `160.dp + navigationBars` 的 `contentPadding` 有三处错配：手势导航（inset 很小却多留）、200% 字号（88dp 的 bar 却留不够，末卡被压在 dock 下）、横屏（dock 宽度封顶但高度不变）。
+
+- 新增纯函数 `dockOverlapPx(barHeightPx, liftPx, navBottomPx)` = bar + lift + navInset，**nav inset 只加一次**（dock 自身用 `navigationBarsPadding()`，调用方不再叠加）。
+- `Dock` 用 `onSizeChanged` 上报实测 overlay，**只在整数 px 变化时**写状态，拖动/弹簧/按压帧不写。
+- `dockContentPaddingPx(overlap, gap, min)` + `dockBottomPaddingPx(px, density)`：末卡比 dock 顶部再高 `8.dp`，且有 `96.dp` 下限（首帧 dock 未测量、或 modal 打开时 dock 不挂载，列表底距仍在）。
+- 冷启动链未动：`captureRevision`、`sampledFrameReady`、`key(sampledFrameReady)`；dock 仍是 `backdropSource` 的**兄弟节点**，永不进入采样源。
+
+### 9.2 bleed 的数学错误已修正
+
+原实现 `measure(maxWidth-2*inset)` 后又 `layout(width+2*inset)`，**返回宽度恰等于原约束**，所以 row 从未真正出血，只有内容 padding 变大。现改为按**原约束**测量、汇报 `width+2*inset`、内容置于 `x=inset`，出血由视口真正扩展到屏幕两侧。
+
+### 9.3 状态不再省略
+
+`QResultRow` 去掉 `maxLines=1 + Ellipsis`，改为 `maxLines=SUBLABEL_MAX_LINES(3)` + `overflow=Visible`：完整可读、有上限、不挤掉卡片元数据。左侧目标名 `weight(1f)` 先让位。新增纯函数 `statusTone(group)` 映射五档语义色（greenSuccess/tealAlready/amberAccepted/grayUnknown/redFailed → 复用 `colorScheme` 角色，不硬编码、跟随主题），并保留文字本身表达含义（色盲可读）。
+
+### 9.4 白色双层描边收敛
+
+原 bar：`border(1.dp, 全周白)` **叠加** SDF `RenderEffect` 高光，两道全周白环 = 生硬白描边。现两者互斥：有模糊时只有 SDF 单向高光（亮度随 `|dot(grad,lightDir)|`，一侧亮一侧暗），无模糊时才用弱 hairline；顶部 sheen 降为 `dark .07 / light .16`，胶囊仅 `.5.dp` 弱边。圆角、弹簧、快击与拖动均未改动。
+
+### 9.5 新增测试（纯 JVM，无设备）
+
+- `DockLayoutV077Test`：nav inset 只加一次、手势 vs 三键、inset=0、200% 字号增高、负数/NaN 不产生负值、末卡净空 = overlay+gap、首帧地板值、Dp 往返与密度无关、退化 density 不崩。
+- `StatusToneV077Test`：五档全部可达且互不塌陷（already≠success、attention≠failed）、大小写/空白容错、未知组回落灰而非红色、`SUBLABEL_MAX_LINES` 是真实上限。
+
+### 9.6 限制
+
+未编译、未上机、**不声称真实 FPS 或与录屏观感一致**；实测 overlay 的设备级验证（旋转、手势导航、IME、200% 字号）留给 root 发布前实际验证。
+
+## 10. 参考
 
 - NexioSchedule `d6f01fb4f645e700c558939bd77fc4f818d97e4d`：<https://github.com/HaoZai000/NexioSchedule/tree/d6f01fb4f645e700c558939bd77fc4f818d97e4d>
 - 上游 backdrop `65ab177e90e5c1d8c62e70cf7755841982da65f6`：<https://github.com/Kyant0/AndroidLiquidGlass/tree/65ab177e90e5c1d8c62e70cf7755841982da65f6>

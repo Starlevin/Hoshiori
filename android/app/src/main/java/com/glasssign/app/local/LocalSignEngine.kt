@@ -8,20 +8,101 @@ import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import com.glasssign.app.data.GameCatalog
 import com.glasssign.app.data.RoleChoice
+import com.glasssign.app.data.AUTHORIZATION_CHECK_NAME
+import com.glasssign.app.data.AUTHORIZATION_CHECK_TARGET
 import java.util.UUID
 
-data class RunSummary(val attempted:Int,val skipped:Int,val waiting:Boolean,val retryPending:Boolean=false,val day:String=SignRepository.day())
-class LocalSignEngine(val repository:SignRepository,val credentials:LocalCredentialStore,private val adapters:Map<String,ProviderAdapter>) {
-    companion object { val mutex=Mutex() }
-    private fun failure(e:Exception):SignResult = if(e is SignError)SignResult(e.status,e.message ?: "社区请求失败") else SignResult("failed","本地处理失败，请核对授权或官方记录")
+data class RunSummary(
+    val attempted:Int,
+    val skipped:Int,
+    val waiting:Boolean,
+    /** True only when a stored row was written with an explicit retryable flag ([SignResult.retryable]). */
+    val retryPending:Boolean=false,
+    val day:String=SignRepository.day(),
+    /** Per-click identifier attached to every write of this run (`result_meta.executionId`). */
+    val executionId:String="",
+    /** Accounts whose tasks were all already proven today: no discovery call and no check-in was made for them. */
+    val alreadyComplete:Int=0,
+    /** Read-only reconcile suggestions (uncertain/accepted rows); nothing was submitted for them. */
+    val awaitingConfirmation:Int=0,
+) {
+    /** True when this click did no network work at all because everything was already guarded. */
+    val noOp:Boolean get()=attempted==0&&!waiting&&!retryPending&&alreadyComplete>0
+}
+
+class LocalSignEngine(val repository:SignRepository,val credentials:CredentialStore,private val adapters:Map<String,ProviderAdapter>) {
+    companion object {
+        /**
+         * One engine per process; every entry point serializes on this lock.
+         *
+         * Not a per-call lock: the scheduler, a manual click and a stale queued job may all start at once, and the
+         * SUBMISSION decision is "read the stored rows, then claim". Two runs that both planned before the first one
+         * claimed would both submit. Holding the same lock across plan+claim+finish makes the plan authoritative.
+         */
+        val mutex=Mutex()
+    }
+    private fun failure(e:Exception):SignResult = (e as? SignError)?.asResult() ?: SignResult("failed","本地处理失败，请核对授权或官方记录")
+    /**
+     * The ONE auth state a provider outcome may produce for the ACCOUNT row.
+     *
+     * Only an explicit authorization/captcha/config rejection changes the account state. A network error, an unknown
+     * HTTP status (including 402 and any unrecognised business code) or a protocol failure says nothing about whether
+     * the stored credential is valid, so the account keeps "valid" and the per-task row carries the failure.
+     */
+    private fun authStateFor(r:SignResult,current:String):String = if(r.status=="needs_action") "needs_action" else current
+    /** Community targets are owned only when the stored scope enables `communityCheckin`. */
+    private fun ownsCommunityTasks(id:String,store:CredentialStore):Boolean = try {
+        store.read(id).optBoolean("communityCheckin",true)
+    } catch (_:Exception) { true }
     suspend fun run(ids:List<String>?=null,scheduled:Boolean=false):RunSummary = mutex.withLock {
-        val day=SignRepository.day();var attempted=0;var skipped=0;var waiting=false
+        val day=SignRepository.day();val executionId=UUID.randomUUID().toString()
+        var attempted=0;var skipped=0;var waiting=false;var retryPending=false;var alreadyComplete=0;var awaiting=0
         // A scheduled run, manual click or stale queued job must not activate a pending binding.
         val eligible=repository.accounts().filter{!it.bindingPending && it.authState!="pending" && it.enabled && (!scheduled || it.autoSignEnabled) && (ids==null || it.id in ids)}
+        val guards=repository.guards(day)
         for(account in eligible) {
             coroutineContext.ensureActive()
+            // ---- PLAN FIRST: no network call and no token renewal before we know there is work -----------------
+            // The known scope is the user's explicit bindings plus the stored community/no-role targets; community
+            // tasks are owned only when the stored scope enables them. Nothing is ever invented.
+            val community=ownsCommunityTasks(account.id,credentials)
+            val todayRows=repository.records(day)
+            val cachedExtras=(todayRows+guards).filter { it.accountId==account.id &&
+                (com.glasssign.app.data.isCommunityTarget(it.targetId)||it.targetId=="no-roles") }
+                .map { RoleChoice(it.targetId,"",it.targetName) }
+            val expectedCommunityIds=if(!community)emptyList() else when(account.provider) {
+                "tagged"->listOf("community|1")
+                "kurobbs"->listOf("community|2")
+                "skland"->account.gameIds.ifEmpty { listOf("arknights","endfield") }.mapNotNull { when(it){"arknights"->"island|1";"endfield"->"island|3";else->null} }
+                else->emptyList()
+            }
+            val communityScopeKnown=expectedCommunityIds.all { id->cachedExtras.any { it.targetId==id } }
+            val plan=planAccount(
+                AccountPlanInput(account.id,account.gameIds,account.roleScope),
+                repository.bindings(account.id),
+                if(community)repository.roleChoices(account.id)+cachedExtras else emptyList(),
+                todayRows,
+                guards,
+                scheduled,
+            )
+            awaiting+=plan.awaitingConfirmation.size
+            if(plan.nothingTodo && communityScopeKnown) {
+                // Every owned task already carries an official/accepted proof for today: no discovery GET, no token
+                // POST, no check-in. A read-only reconcile stays an explicit user action (`reconcile`), never automatic.
+                // The completed rows are re-stated as a LOCAL CACHE display (the proof itself, including its
+                // verifiedAt, is preserved) so the UI never presents an old result as a fresh official query.
+                plan.skipped.forEach{(task,_)->repository.acknowledgeSigned(day,account.id,task.target)}
+                alreadyComplete++
+                skipped+=plan.skipped.size
+                continue
+            }
+            if(plan.trustedScope&&!plan.hasWork && communityScopeKnown) {
+                // Stored but unconfirmed outcomes only: submission must not happen, so no token is renewed either.
+                skipped+=plan.skipped.size
+                continue
+            }
             val c:JSONObject;val adapter:ProviderAdapter;val targets:List<SignTarget>
-            val discovery=SignTarget("discovery","授权与角色检查")
+            val discovery=SignTarget(AUTHORIZATION_CHECK_TARGET,AUTHORIZATION_CHECK_NAME)
             // Discovery itself is claimed: token renewal is serialized and bounded too.
             if(!repository.claim(day,account.id,discovery)) {skipped++;continue}
             try {
@@ -34,23 +115,50 @@ class LocalSignEngine(val repository:SignRepository,val credentials:LocalCredent
                 // Remove successful discovery claims; only actual task outcomes appear as success.
                 repository.finish(day,account.id,discovery,SignResult("failed","角色查询完成"));repository.clearDiscoveryFailure(account.id)
             } catch(e:Exception) {
-                val r=failure(e);repository.finish(day,account.id,discovery,r);repository.auth(account.id,r.status,r.message);waiting=waiting||r.status=="waiting_network";continue
-            }
-            for(t in targets.distinctBy{it.id}) {
-                coroutineContext.ensureActive()
-                val binding=repository.bindings(account.id).firstOrNull{it.targetId==t.id}
-                if((account.roleScope && t.isBoundRole() && binding==null) || binding?.enabled==false || (scheduled && binding?.autoSignEnabled==false)) {skipped++;continue}
-                if(!repository.claim(day,account.id,t)) {repository.acknowledgeSigned(day,account.id,t);skipped++;continue}
-                attempted++
-                val r=try { adapter.checkin(c,t){credentials.save(account.id,c)} } catch(e:Exception){failure(e)}
-                repository.finish(day,account.id,t,r)
-                if(r.status=="needs_action")repository.auth(account.id,"needs_action",r.message)
+                val r=failure(e).copy(executionId=executionId)
+                repository.finish(day,account.id,discovery,r)
+                // A discovery failure is NEVER a statement about the session: only an explicit auth/captcha/config
+                // rejection marks the account needs_action. Network / unknown HTTP (402 included) keep "valid".
+                if(r.status=="needs_action")repository.auth(account.id,"needs_action",r.message) else repository.authDiagnostic(account.id,r.message)
                 waiting=waiting||r.status=="waiting_network"
+                retryPending=retryPending||(r.retryable&&r.status in setOf("failed","waiting_network"))
+                continue
+            }
+            // Re-plan with the fresh bindings so a game the user JUST enabled is never skipped, then execute only
+            // planned tasks: the discovery result can never make the engine sign a target it was not told about.
+            for(t in targets.distinctBy { it.id }) {
+                coroutineContext.ensureActive()
+                val binding=repository.bindings(account.id).firstOrNull { it.targetId==t.id }
+                if((account.roleScope&&t.isBoundRole()&&binding==null)||binding?.enabled==false||
+                    (scheduled&&binding?.autoSignEnabled==false)) {skipped++;continue}
+                if(!repository.claim(day,account.id,t)) {
+                    // Already proven/blocked today (a concurrent run won the claim): submit nothing, and state that
+                    // the evidence comes from the local cache while keeping the original verifiedAt.
+                    repository.acknowledgeSigned(day,account.id,t)
+                    skipped++;continue
+                }
+                attempted++
+                val result=try { adapter.checkin(c,t){credentials.save(account.id,c)} } catch(e:Exception){failure(e)}
+                val tagged=result.copy(executionId=executionId)
+                repository.finish(day,account.id,t,tagged)
+                if(tagged.status=="needs_action")repository.auth(account.id,authStateFor(tagged,account.authState),tagged.message)
+                waiting=waiting||tagged.status=="waiting_network"
+                retryPending=retryPending||(tagged.retryable&&tagged.status in setOf("failed","waiting_network"))
             }
         }
         val eligibleIds=eligible.map{it.id}.toSet()
         val unfinished=repository.records(day).filter{it.accountId in eligibleIds && it.attempts<3}
-        RunSummary(attempted,skipped,waiting || unfinished.any{it.status=="waiting_network"},unfinished.any{it.status=="failed"},day)
+        RunSummary(
+            attempted=attempted,
+            skipped=skipped,
+            waiting=waiting||unfinished.any{it.status=="waiting_network"&&it.retryable},
+            // Retryability is explicit: a stored row retries ONLY when its metadata says retryable=true.
+            retryPending=retryPending||unfinished.any{it.resultMeta.retryable&&it.status in setOf("failed","waiting_network")},
+            day=day,
+            executionId=executionId,
+            alreadyComplete=alreadyComplete,
+            awaitingConfirmation=awaiting,
+        )
     }
     suspend fun verify(id:String):String = mutex.withLock {
         val a=repository.accounts().firstOrNull{it.id==id} ?: return@withLock "账号已删除"
@@ -63,23 +171,39 @@ class LocalSignEngine(val repository:SignRepository,val credentials:LocalCredent
             repository.auth(id,if(valid)"valid" else "needs_action",message)
             if(valid)repository.clearDiscoveryFailure(id)
             message
-        } catch(e:Exception){ val r=failure(e);repository.auth(id,r.status,r.message);r.message }
+        } catch(e:Exception){ val r=failure(e);if(r.status=="needs_action")repository.auth(id,"needs_action",r.message) else repository.authDiagnostic(id,r.message);r.message }
     }
 
+    /**
+     * Explicit user action only: read-only official status for one target.
+     *
+     *  - Works for ANY existing stored row, including an `accepted` submission (query-only manual verification).
+     *  - It may renew an expired token internally (adapters refresh on demand), but it never submits a check-in.
+     *  - A failed/inconclusive query preserves the stored accepted/official proof (see [SignRepository.reconcile]).
+     *  - The row shows `verifying` while the read runs; that transient state never erases the earlier proof.
+     */
     suspend fun reconcile(id:String,target:String):String=mutex.withLock {
-        val a=repository.accounts().first{it.id==id}
-        val record=repository.records(SignRepository.day()).firstOrNull{it.accountId==id&&it.targetId==target} ?: return@withLock "只可校验今天已有记录"
-        val c=GameCatalog.scope(a.provider,a.gameIds,credentials.read(id))
-        val result=try{adapters.getValue(a.provider).queryStatus(c,SignTarget(target,record.targetName)){credentials.save(id,c)}}catch(e:Exception){SignResult("uncertain",failure(e).message)}
-        if(result.status=="uncertain"&&record.status in setOf("success","already")) {
-            val known=when(record.resultSource){"official"->"已有官方确认的完成记录";"accepted"->"已有官方接受提交的记录";else->"已有本机完成记录"}
-            return@withLock "$known；本次只读核对未取得新结论，原记录已保留"
-        }
-        if(result.status=="already") {
+        val a=repository.accounts().firstOrNull{it.id==id} ?: return@withLock "账号已删除"
+        val day=SignRepository.day()
+        val record=repository.records(day).firstOrNull{it.accountId==id&&it.targetId==target} ?: return@withLock "只可校验今天已有记录"
+        val c:JSONObject=try{GameCatalog.scope(a.provider,a.gameIds,credentials.read(id))}catch(e:Exception){val r=failure(e);if(r.status=="needs_action")repository.auth(id,"needs_action",r.message);return@withLock r.message}
+        repository.markVerifying(day,id,target)
+        val result=try{adapters.getValue(a.provider).queryStatus(c,SignTarget(target,record.targetName)){credentials.save(id,c)}}catch(e:Exception){failure(e)}
+        if(result.isOfficialConfirmation) {
             repository.auth(id,"valid","授权可读取官方签到状态；其他角色仍按各自记录判断")
             repository.clearDiscoveryFailure(id)
         }
-        repository.reconcile(SignRepository.day(),id,target,result);result.message
+        else if(result.status=="needs_action")repository.auth(id,"needs_action",result.message)
+        val stored=repository.reconcile(day,id,target,result.copy(executionId=UUID.randomUUID().toString()))
+        if(result.isOfficialConfirmation) return@withLock "官方状态已确认今日完成：${result.message}"
+        val known=when(provenanceOf(record).source){
+            SOURCE_OFFICIAL->"已有官方确认的完成记录"
+            SOURCE_ACCEPTED->"已有官方接受提交的记录"
+            SOURCE_LOCAL_CACHE,SOURCE_LEGACY_LOCAL->"已有本机完成记录"
+            else->"已有 ${record.status} 记录"
+        }
+        if(stored==null) "记录已被清理；本次只读核对未取得新结论（${result.message}）"
+        else "$known；本次只读核对未取得新结论，原记录已保留"
     }
     /** Enumerates games using existing authorization, without submitting any check-in. */
     suspend fun gamesForSelection(id:String):DiscoverOutcome = mutex.withLock {

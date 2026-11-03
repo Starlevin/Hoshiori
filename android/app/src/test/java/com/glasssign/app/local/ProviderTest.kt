@@ -35,7 +35,7 @@ class ProviderTest {
     }
     @Test fun miyousheDoesNotClaimSuccessWithoutFinalConfirmation() {
         val h=Fake{if(it.url.endsWith("/sign"))JSONObject("""{"retcode":0}""") else JSONObject("""{"retcode":0,"data":{"is_sign":false}}""")}
-        assertEquals("uncertain",MiyousheAdapter(h).checkin(JSONObject("""{"cookie":"fixture-cookie"}"""),SignTarget("genshin|1|cn_gf01","test")){}.status)
+        assertEquals("accepted",MiyousheAdapter(h).checkin(JSONObject("""{"cookie":"fixture-cookie"}"""),SignTarget("genshin|1|cn_gf01","test")){}.status)
     }
     @Test fun miyousheCaptchaStopsBeforeSign() {
         val h=Fake{JSONObject("""{"retcode":1034}""")}
@@ -136,13 +136,15 @@ class ProviderTest {
             else->JSONObject("""{"code":0}""")
         }}
         val credential=JSONObject("""{"cred":"fixture","signToken":"old","dId":"d"}""")
-        assertEquals("uncertain",SklandAdapter(http).checkin(credential,SignTarget("arknights|100|1","fixture")){}.status)
+        assertEquals("accepted",SklandAdapter(http).checkin(credential,SignTarget("arknights|100|1","fixture")){}.status)
         assertEquals(1,http.calls.count{it.method=="POST"})
     }
     @Test fun taggedRefreshAndAlreadyAvoidsPost() {
-        val h=Fake {when {it.url.endsWith("refreshToken")->JSONObject("""{"code":0,"data":{"accessToken":"fixture-a","refreshToken":"fixture-rotated","uid":"9"}}""");it.url.endsWith("getGameRoles")->fixture("tagged_roles.json");it.url.endsWith("signin/state")->fixture("tagged_state_signed.json");else->error("Unexpected request")}}
+        // v0.7.7 P0: `todaySign` only proves a ROLE when the account owns exactly one role for the game, so the
+        // fixture now declares a single authorized role. A multi-role account keeps the permission to submit.
+        val h=Fake {when {it.url.endsWith("refreshToken")->JSONObject("""{"code":0,"data":{"accessToken":"fixture-a","refreshToken":"fixture-rotated","uid":"9"}}""");it.url.endsWith("getGameRoles")->JSONObject("""{"code":0,"data":{"roles":[{"roleId":"50000001"}]}}""");it.url.endsWith("signin/state")->fixture("tagged_state_signed.json");else->error("Unexpected request")}}
         val c=JSONObject("""{"refreshToken":"fixture-old","deviceId":"fixture-d","communityCheckin":false}""");val a=TaggedAdapter(h);var saved=false
-        val ts=a.targets(c){saved=true};assertTrue(saved);assertEquals("fixture-rotated",c.getString("refreshToken"));assertEquals(2,ts.size)
+        val ts=a.targets(c){saved=true};assertTrue(saved);assertEquals("fixture-rotated",c.getString("refreshToken"));assertEquals(1,ts.size)
         assertEquals("already",a.checkin(c,ts[0]){}.status);assertFalse(h.calls.any{it.url.endsWith("/awapi/sign")})
     }
     @Test fun taggedRotationSurvivesFollowingNetworkFailure() {

@@ -26,7 +26,7 @@ object MigrationSnapshot {
         val destination=File(folder,"${File(name).name}.v$version.json")
         if(destination.exists()) {validate(destination,version);return}
         val snapshot=JSONObject().put("schema",version).put("tables",JSONObject())
-        for(table in listOf("accounts","records","pending_bindings","retired_credentials")) {
+        for(table in listOf("accounts","records","pending_bindings","retired_credentials","sign_guards","game_bindings","discovered_roles")) {
             val exists=db.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND name=?",arrayOf(table)).use{it.moveToFirst()}
             if(!exists)continue
             val rows=JSONArray()

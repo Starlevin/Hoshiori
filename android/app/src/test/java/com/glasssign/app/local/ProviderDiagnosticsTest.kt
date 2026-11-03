@@ -52,8 +52,10 @@ class ProviderDiagnosticsTest {
             assertEquals("needs_action", captcha.status)
         }
 
+        // v0.7.7 P0: 429 is a rate limit, not an authorization event and not a retryable failure.
         val limited = classifyStatus("GET", "bbs-api.tajiduo.com", 429)
         assertEquals("rate_limit", limited.kind)
+        assertEquals("failed", limited.status)
 
         for (code in listOf(404, 418, 451, 470)) {
             val unexpected = classifyStatus("GET", "bbs-api.tajiduo.com", code)
@@ -84,6 +86,11 @@ class ProviderDiagnosticsTest {
         assertTrue("exactly one separator keeps the line readable in a record", described.count { it == '·' } == 1)
         assertFalse("no query material is representable", described.contains("?"))
         assertFalse("no token-shaped value is representable", described.contains("token"))
+
+        // v0.7.7 P0: a rejected request keeps its PATH (attribution) but never its query or any user identifier.
+        val attributable = HttpRejection("POST", "bbs-api.tajiduo.com", 402, "/apihub/awapi/sign")
+        assertEquals("POST bbs-api.tajiduo.com/apihub/awapi/sign · HTTP 402", attributable.describe())
+        assertEquals("/apihub/awapi/sign", safeEndpoint("/apihub/awapi/sign?gameId=1289&roleId=50000001"))
 
         val message = classifyStatus("GET", "bbs-api.tajiduo.com", 470).message.orEmpty()
         assertFalse(message.contains("fixture-refresh-token"))
@@ -118,7 +125,8 @@ class ProviderDiagnosticsTest {
 
     @Test fun a2xxBusinessCodeStillUsesTheOriginalAdapterMapping() {
         // A JSON reply with a non-zero business code is an HTTP 200 success: the adapter, not the
-        // transport, decides the outcome. 401/402 stay `auth`, 403 stays `captcha`.
+        // transport, decides the outcome. 401 stays `auth`, 403 stays `captcha`, 402 stays `protocol`
+        // (an unexplained business rejection must not force a re-login).
         val auth = try {
             TaggedAdapter(Fake(JSONObject("""{"code":401}"""))).targets(JSONObject(credentials)) {}
             null
@@ -131,6 +139,12 @@ class ProviderDiagnosticsTest {
         } catch (e: SignError) { e }
         assertEquals("captcha", captcha?.kind)
 
+        val unexplained402 = try {
+            TaggedAdapter(Fake(JSONObject("""{"code":402}"""))).targets(JSONObject(credentials)) {}
+            null
+        } catch (e: SignError) { e }
+        assertEquals("a business 402 is not proof of an expired session", "protocol", unexplained402?.kind)
+
         val other = try {
             TaggedAdapter(Fake(JSONObject("""{"code":-1}"""))).targets(JSONObject(credentials)) {}
             null
@@ -139,7 +153,7 @@ class ProviderDiagnosticsTest {
         val message = other?.message.orEmpty()
         assertTrue(
             "a 2xx reply adds no HTTP suffix because the transport was never rejected: $message",
-            message.contains("（-1）") && !message.contains("HTTP"),
+            message.contains("业务码 -1") && !message.contains("HTTP"),
         )
     }
 

@@ -25,10 +25,12 @@ class V070PolicyTest {
     @Test fun unknownAndAcceptedAreNotClaimedOfficiallyVerified() {
         val r=CheckRecord("fixture","game|fixture","fixture","uncertain","synthetic",1,"date")
         assertEquals("uncertain",present(r).group)
-        assertEquals("结果待确认",present(r).label)
-        assertEquals("提交已接受",present(r.copy(status="success",message="官方接口已接受签到")).label)
+        assertEquals("未知",present(r).label)
+        // v0.7.7: provenance is explicit, so the historical "接受" wording no longer decides the label.
+        assertEquals("签到成功",present(r.copy(status="success",message="官方接口已接受签到")).label)
+        assertEquals("已提交等待确认",present(r.copy(status="success",message="官方接口已接受签到",resultSource="accepted")).label)
         assertEquals("已签到",present(r.copy(status="already")).label)
-        assertEquals("本机当天完成记录",present(r.copy(status="already",message="本机已有当天成功记录")).source)
+        assertEquals("本机当天完成记录（沿用原证明，未重新查询官方）",present(r.copy(status="already",message="本机已有当天成功记录",resultSource="legacy_local")).source)
     }
     @Test fun blurAndMotionFallBackIndependentlyForRealCapabilities() {
         assertTrue(glassPolicy(35,false,false,false,false,true,"standard").blur)
@@ -55,12 +57,12 @@ class V070PolicyTest {
             else if(calls==1)JSONObject("""{"retcode":0,"data":{"is_sign":false}}""")
             else throw SignError("network","合成状态查询断网")
         }
-        assertEquals("uncertain",MiyousheAdapter(h).checkin(JSONObject().put("cookie","synthetic"),SignTarget("genshin|fixture|server","fixture")){}.status)
+        assertEquals("accepted",MiyousheAdapter(h).checkin(JSONObject().put("cookie","synthetic"),SignTarget("genshin|fixture|server","fixture")){}.status)
         assertEquals(1,h.calls.count{it.method=="POST"})
     }
     @Test fun legacyUnknownMessageMapsToUnknownWithoutChangingStoredEvidence() {
         val r=CheckRecord("fixture","fixture","fixture","needs_action","提交中断，结果不确定",1,"date")
-        assertEquals("结果待确认",present(r).label)
+        assertEquals("未知",present(r).label)
         assertEquals("needs_action",r.status)
     }
 }

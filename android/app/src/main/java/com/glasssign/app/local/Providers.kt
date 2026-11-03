@@ -7,6 +7,17 @@ import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.UUID
 
+/*
+ * v0.7.7 P0 adapters (contract: docs/v077-p0-contract.md). Every branch states its provenance explicitly:
+ *  - `already` comes only from an official read (info / calendar / provider status code) -> official + method + time;
+ *  - a plain acceptance is `success` + `accepted` (+ `submitted`), never an unqualified success;
+ *  - a POST that ONE bounded, role-attributable GET cannot confirm is `uncertain`, which protects resubmission;
+ *  - HTTP/business 402 is an unexplained provider rejection: never `auth`, never retried, never a payment step.
+ */
+
+/** Skland 10001 carries a human message; the phrase only selects the KNOWN "already signed" reading. */
+private fun alreadySignedPhrase(message: String) = listOf("已签到", "重复").any { message.contains(it) }
+
 class MiyousheAdapter(private val http: Transport) : ProviderAdapter {
     private data class Game(val name:String,val biz:String,val act:String,val base:String,val path:String,val signgame:String)
     private val base = "https://api-takumi.mihoyo.com"
@@ -34,7 +45,14 @@ class MiyousheAdapter(private val http: Transport) : ProviderAdapter {
         }
         return r
     }
-    private fun check(r:JSONObject) { when(r.optString("retcode")) { "0" -> Unit; "-100" -> throw SignError("auth","米游社授权失效"); "1034" -> throw SignError("captcha","请在米游社完成人机验证"); else -> throw SignError("protocol","米游社接口未确认成功") } }
+    /**
+     * Business status check of a 2xx reply. 402 is deliberately NOT `auth` here: Miyoushe's own code space is not
+     * observable, so an unexplained business rejection stops the flow as `protocol` instead of asking for a login.
+     */
+    private fun check(r:JSONObject) { when(r.optString("retcode")) { "0" -> Unit; "-100" -> throw SignError("auth","米游社授权失效"); "1034" -> throw SignError("captcha","请在米游社完成人机验证"); else -> throw SignError("protocol","米游社接口未确认成功（业务码 ${safeCode(r.optString("retcode"))}），未重新提交") } }
+    /** Official `info` state: `data.is_sign` must be the Boolean true. Only this makes a role row "already". */
+    private fun signed(r:JSONObject) = r.optString("retcode")=="0" && r.optJSONObject("data")?.opt("is_sign")==true
+    private fun official(r:JSONObject,method:String)=SignResult("already","只读官方状态确认已签到",resultSource=ResultSource.OFFICIAL,providerCode=safeCode(r.optString("retcode")),verificationMethod=method,verifiedAt=SignRepository.now())
     override fun targets(c:JSONObject,persist:()->Unit):List<SignTarget> {
         val items=mutableListOf<SignTarget>()
         for(key in c.strings("games",games.keys.toList())) {
@@ -50,8 +68,10 @@ class MiyousheAdapter(private val http: Transport) : ProviderAdapter {
     override fun queryStatus(c:JSONObject,t:SignTarget,persist:()->Unit):SignResult {
         val p=t.id.split('|');val g=games[p[0]] ?: return SignResult("uncertain","未识别游戏，请在官方应用核对")
         if(p.size!=3)return SignResult("uncertain","角色不完整，未重新提交")
+        // The query carries uid+region, so an answer is attributable to THIS role.
         val r=request(c,g,"GET",g.base+g.path+"/info",persist,mapOf("lang" to "zh-cn","act_id" to g.act,"region" to p[2],"uid" to p[1]));check(r)
-        return if(r.optJSONObject("data")?.opt("is_sign")==true)SignResult("already","只读官方状态确认已签到") else SignResult("uncertain","官方暂未确认已签；先前提交仍待核对，未重新提交")
+        return if(signed(r))official(r,VerifyMethod.INFO)
+            else SignResult("uncertain","官方暂未确认已签；先前提交仍待核对，未重新提交",providerCode=safeCode(r.optString("retcode")))
     }
     override fun checkin(c:JSONObject,t:SignTarget,persist:()->Unit):SignResult {
         val p=t.id.split('|');val g=games[p[0]]
@@ -60,14 +80,17 @@ class MiyousheAdapter(private val http: Transport) : ProviderAdapter {
         var r=request(c,g,"GET",g.base+g.path+"/info",persist,query);check(r)
         val stateData=r.optJSONObject("data")
         if(stateData?.opt("is_sign") !is Boolean)throw SignError("protocol","米游社状态响应缺少签到状态，已停止提交")
-        if(stateData.optBoolean("is_sign"))return SignResult("already","状态接口确认今日已签")
+        if(stateData.optBoolean("is_sign"))return official(r,VerifyMethod.INFO)
         val body=JSONObject(linkedMapOf("act_id" to g.act,"region" to p[2],"uid" to p[1])).toString()
         r=request(c,g,"POST",g.base+g.path+"/sign",persist,body=body)
-        if(r.optJSONObject("data")?.optInt("success")==1)return SignResult("needs_action","请在米游社完成人机验证")
+        if(r.optJSONObject("data")?.optInt("success")==1)return SignResult("needs_action","请在米游社完成人机验证",providerCode=safeCode(r.optString("retcode")))
         val outcome=result(r.optString("retcode"),already=setOf("-5003"),auth=setOf("-100"),captcha=setOf("1034"))
-        if(outcome.status!="success")return outcome
-        val verify=try{request(c,g,"GET",g.base+g.path+"/info",persist,query)}catch(_:Exception){return SignResult("uncertain","提交已接受，但后续官方状态查询未完成；请先核对，未重新提交")}
-        return if(verify.optString("retcode")=="0"&&verify.optJSONObject("data")?.optBoolean("is_sign")==true)SignResult("success","签到成功，官方状态已确认") else SignResult("uncertain","提交后状态未确认，请在官方应用核对后再操作")
+        if(outcome.status!="accepted")return outcome
+        // ONE bounded verification read. Its failure is never a retryable network error: the POST was accepted.
+        val acceptCode=safeCode(r.optString("retcode"))
+        val verify=try{request(c,g,"GET",g.base+g.path+"/info",persist,query)}catch(_:Exception){return SignResult("accepted","提交已接受，但后续官方状态查询未完成；请先核对，未重新提交",resultSource=ResultSource.ACCEPTED,providerCode=acceptCode,verificationMethod=VerifyMethod.SUBMITTED)}
+        return if(signed(verify))SignResult("success","签到成功，官方状态已确认",resultSource=ResultSource.OFFICIAL,providerCode=safeCode(verify.optString("retcode")),verificationMethod=VerifyMethod.INFO,verifiedAt=SignRepository.now())
+            else SignResult("accepted","提交后状态未确认，请在官方应用核对后再操作",resultSource=ResultSource.ACCEPTED,providerCode=acceptCode,verificationMethod=VerifyMethod.SUBMITTED)
     }
 }
 
@@ -108,11 +131,12 @@ class SklandAdapter(private val http:Transport) : ProviderAdapter {
         if(parts.size!=3||parts[0]!="arknights"||parts.drop(1).any{it.isBlank()||!it.all(Char::isDigit)})
             return SignResult("uncertain","此角色尚无已验证的独立状态查询，请在官方应用核对；未重新提交")
         renew(c,persist)
+        // `gameId` + `uid` address one specific role, so a record for today proves THIS target.
         val response=call(c,"/game/attendance",get=true,query=linkedMapOf("gameId" to parts[2],"uid" to parts[1]))
         val data=response.optJSONObject("data")
         val records=data?.optJSONArray("records")
         if(response.optString("code")!="0"||data==null||records==null)
-            return SignResult("uncertain","官方签到日历未返回完整记录；未重新提交")
+            return SignResult("uncertain","官方签到日历未返回完整记录；未重新提交",providerCode=safeCode(response.optString("code")))
         fun date(value:Long)=runCatching{if(value !in 1_000_000_000L..9_999_999_999L)null else Instant.ofEpochSecond(value).atZone(ZoneId.of("Asia/Shanghai")).toLocalDate()}.getOrNull()
         val today=date(data.optLong("currentTs",0))
         if(today==null||today!=ZonedDateTime.now(ZoneId.of("Asia/Shanghai")).toLocalDate())
@@ -120,11 +144,11 @@ class SklandAdapter(private val http:Transport) : ProviderAdapter {
         var malformed=false
         for(index in 0 until records.length()) {
             val recordDay=date(records.optJSONObject(index)?.optLong("ts",0) ?: 0)
-            if(recordDay==today)return SignResult("already","只读官方签到日历确认今日已签到")
+            if(recordDay==today)return SignResult("already","只读官方签到日历确认今日已签到",resultSource=ResultSource.OFFICIAL,providerCode=safeCode(response.optString("code")),verificationMethod=VerifyMethod.CALENDAR,verifiedAt=SignRepository.now())
             if(recordDay==null)malformed=true
         }
         return if(malformed)SignResult("uncertain","官方签到记录格式未确认；未重新提交")
-            else SignResult("pending","官方签到日历尚无今日记录")
+            else SignResult("pending","官方签到日历尚无今日记录",providerCode=safeCode(response.optString("code")))
     }
     override fun queryStatus(c:JSONObject,t:SignTarget,persist:()->Unit):SignResult {
         val state=attendance(c,t,persist)
@@ -133,7 +157,7 @@ class SklandAdapter(private val http:Transport) : ProviderAdapter {
     override fun targets(c:JSONObject,persist:()->Unit):List<SignTarget> {
         renew(c,persist)
         val r=call(c,"/game/player/binding",get=true)
-        if(r.optString("code")!="0")throw SignError("auth","森空岛授权失效或角色查询失败")
+        if(r.optString("code")!="0")throw SignError("auth","森空岛授权失效或角色查询失败（业务码 ${safeCode(r.optString("code"))}）")
         val selected=c.strings("games",listOf("arknights","endfield"));val items=mutableListOf<SignTarget>()
         r.optJSONObject("data")?.rows("list")?.forEach { game ->
             val kind=game.optString("appCode")
@@ -154,6 +178,7 @@ class SklandAdapter(private val http:Transport) : ProviderAdapter {
     }
     override fun checkin(c:JSONObject,t:SignTarget,persist:()->Unit):SignResult {
         val p=t.id.split('|')
+        // Pre-check: the arknights calendar is role-addressable, so it may prove the target before any submission.
         if(p[0]=="arknights"&&p.size==3) {
             val state=attendance(c,t,persist)
             if(state.status!="pending")return state
@@ -164,12 +189,16 @@ class SklandAdapter(private val http:Transport) : ProviderAdapter {
             p[0]=="island"&&p.size==2 -> call(c,"/score/checkin",JSONObject().put("gameId",p[1]))
             else -> return SignResult("needs_action","请在森空岛绑定角色")
         }
-        if(r.optString("code")=="10001")return if(listOf("已签到","重复").any{r.optString("message").contains(it)})SignResult("already","官方提示今日已签") else SignResult("needs_action","设备授权需核对，请在官方应用处理")
+        if(r.optString("code")=="10001")return if(alreadySignedPhrase(r.optString("message")))
+            SignResult("already","官方提示今日已签",resultSource=ResultSource.OFFICIAL,providerCode=safeCode(r.optString("code")),verificationMethod=VerifyMethod.PROVIDER_STATUS,verifiedAt=SignRepository.now())
+            else SignResult("needs_action","设备授权需核对，请在官方应用处理",providerCode=safeCode(r.optString("code")))
         val outcome=result(r.optString("code"),auth=setOf("10003"),captcha=setOf("10002"))
-        if(p[0]=="arknights"&&outcome.status=="success") {
+        if(p[0]=="arknights"&&outcome.status=="accepted") {
+            // Post-check (one bounded read). `attendance` returns `pending` for "no record today" and `uncertain`
+            // for an unreadable calendar; only `already` may upgrade the accepted submission.
             val confirmation=try{attendance(c,t,persist)}catch(_:Exception){null}
-            return if(confirmation?.status=="already")SignResult("success","签到成功，官方状态已确认")
-                else SignResult("uncertain","提交已接受，但官方日历尚未确认今日状态；未重新提交")
+            return if(confirmation?.status=="already")SignResult("success","签到成功，官方状态已确认",resultSource=ResultSource.OFFICIAL,providerCode=outcome.providerCode,verificationMethod=VerifyMethod.CALENDAR,verifiedAt=SignRepository.now())
+                else SignResult("accepted","提交已接受，但官方日历尚未确认今日状态；未重新提交",resultSource=ResultSource.ACCEPTED,providerCode=outcome.providerCode,verificationMethod=VerifyMethod.SUBMITTED)
         }
         return outcome
     }
@@ -181,12 +210,27 @@ class TaggedAdapter(private val http:Transport) : ProviderAdapter {
     private fun token(c:JSONObject,persist:()->Unit):String {
         c.optString("_accessToken").takeIf{it.isNotBlank()}?.let{return it}
         required(c,"refreshToken","deviceId")
+        // `debug-uid: 3` is a compatibility header kept from the shipped v0.7.6 build. It is NOT a user identity and
+        // carries no account data, so removing it would be an undocumented protocol change; the third-party
+        // reference implementation sends the same value. Keep it, audited here, until a real response proves it wrong.
         val r=http.call("POST",base+"/usercenter/api/refreshToken",headers(c,c.getString("refreshToken"))+mapOf("debug-uid" to "3"),form=emptyMap())
-        if(r.optString("code")!="0")throw SignError("auth","塔吉多续期失败，请重新登录")
+        if(r.optString("code")!="0")throw SignError("auth","塔吉多续期失败，请重新登录（业务码 ${safeCode(r.optString("code"))}）")
         val d=r.optJSONObject("data") ?: throw SignError("protocol","令牌响应格式异常")
         required(d,"accessToken","refreshToken")
         c.put("refreshToken",d.getString("refreshToken")).put("uid",d.optString("uid",c.optString("uid"))).put("_accessToken",d.getString("accessToken"));persist()
         return d.getString("accessToken")
+    }
+    /** The roles this account is verified to own for [gameId]: the pinned selection, else the last enumeration. */
+    private fun authorizedRoles(c:JSONObject,persist:()->Unit,gameId:String):List<String> {
+        val configured=c.strings("roleIds",emptyList())
+        if(configured.isNotEmpty())return configured
+        val access=c.optString("_accessToken").takeIf{it.isNotBlank()} ?: runCatching{token(c,persist)}.getOrNull().orEmpty()
+        if(access.isBlank())return emptyList()
+        return runCatching{
+            val r=http.call("GET",base+"/usercenter/api/v2/getGameRoles",headers(c,access),query=mapOf("gameId" to gameId))
+            if(r.optString("code")!="0")return@runCatching emptyList()
+            val d=r.optJSONObject("data");(d?.rows("roles").orEmpty().ifEmpty{d?.rows("list").orEmpty()}).map{it.optString("roleId")}.filter{it.isNotBlank()}
+        }.getOrDefault(emptyList())
     }
     override fun targets(c:JSONObject,persist:()->Unit):List<SignTarget> {
         val token=token(c,persist);val items=mutableListOf<SignTarget>()
@@ -198,9 +242,10 @@ class TaggedAdapter(private val http:Transport) : ProviderAdapter {
             val roles=if(configured.isNotEmpty())configured.map{it to it} else {
                 val r=transport.call("GET",base+"/usercenter/api/v2/getGameRoles",headers(c,token),query=mapOf("gameId" to gid))
                 if(r.optString("code")!="0") {
-                    val code=r.optString("code").takeIf{it.matches(Regex("[A-Za-z0-9_-]{1,12}"))} ?: "unknown"
-                    // Only method/host/status: a rejected request stays attributable without echoing a body or token.
-                    throw SignError(when(code){"401","402"->"auth";"403"->"captcha";else->"protocol"},"塔吉多角色查询未完成（$code）"+rejectionDetail(transport)+"，请检查授权或官方绑定状态")
+                    val code=safeCode(r.optString("code"))
+                    // 401 is an authorization statement; 403/412 are captcha; 402 and every other code are an
+                    // unexplained provider rejection and must not masquerade as `auth` (no automatic re-login).
+                    throw SignError(when(code){"401"->"auth";"403","412"->"captcha";else->"protocol"},"塔吉多角色查询未完成（业务码 $code）"+rejectionDetail(transport)+"，请检查授权或官方绑定状态")
                 }
                 val d=r.optJSONObject("data");(d?.rows("roles").orEmpty().ifEmpty{d?.rows("list").orEmpty()}).map{it.optString("roleId") to it.optString("roleName",it.optString("nickname"))}
             }
@@ -215,20 +260,60 @@ class TaggedAdapter(private val http:Transport) : ProviderAdapter {
         val p=t.id.split('|')
         if(p.size!=3||p[0]!="game")return SignResult("uncertain","社区任务请在官方应用核对，未重新提交")
         val r=http.call("GET",base+"/apihub/awapi/signin/state",headers(c,token(c,persist)),query=mapOf("gameId" to p[1]))
-        return if(r.optString("code")=="0"&&r.optJSONObject("data")?.opt("todaySign")==true)SignResult("already","只读官方状态确认已签到") else SignResult("uncertain","官方暂未确认已签；未重新提交，请核对游戏状态")
+        if(r.optString("code")!="0")return SignResult("uncertain","官方状态查询未取得结论；未重新提交",providerCode=safeCode(r.optString("code")))
+        val data=r.optJSONObject("data");val today=data?.opt("todaySign")
+        val stateRole=roleIdOf(data)
+        if(stateRoleMismatch(p[2],stateRole))return SignResult("uncertain","官方状态响应对应其他角色；未重新提交",providerCode=safeCode(r.optString("code")))
+        // Without a role-identifying field the answer cannot be attributed unless the account owns exactly one role.
+        val authorized=when {
+            stateRole.isNotBlank() -> setOf(stateRole)
+            else -> runCatching{authorizedRoles(c,persist,p[1])}.getOrDefault(emptyList()).toSet()
+        }
+        val proven=taggedRoleProof(p[2],authorized,r.optString("code"),data?.optString("gameId").orEmpty(),p[1],stateRole,today)
+        return if(proven)SignResult("already","只读官方状态确认已签到",resultSource=ResultSource.OFFICIAL,providerCode=safeCode(r.optString("code")),verificationMethod=VerifyMethod.STATE,verifiedAt=SignRepository.now())
+            else SignResult("uncertain","官方暂未确认已签；未重新提交，请核对游戏状态",providerCode=safeCode(r.optString("code")))
+    }
+    /** A role id from the state payload, when the platform sends one (`roleId`, `role_id`, or inside `role`). */
+    private fun roleIdOf(data:JSONObject?):String {
+        if(data==null)return ""
+        for(key in listOf("roleId","role_id"))data.optString(key).takeIf{it.isNotBlank()}?.let{return it}
+        data.optJSONObject("role")?.let{r->for(key in listOf("roleId","role_id"))r.optString(key).takeIf{it.isNotBlank()}?.let{return it}}
+        return ""
     }
     override fun checkin(c:JSONObject,t:SignTarget,persist:()->Unit):SignResult {
         val h=headers(c,token(c,persist));val p=t.id.split('|')
-        if(p[0]=="community") {val r=http.call("POST",base+"/apihub/api/signin",h,form=mapOf("communityId" to "1"));return result(r.optString("code"),auth=setOf("401","402"),captcha=setOf("403"))}
+        // Community check-in has no verified read-only endpoint. A plain acceptance is reported as accepted with
+        // verificationMethod=not_supported; there is no made-up status API and no extra POST.
+        if(p[0]=="community") {val r=http.call("POST",base+"/apihub/api/signin",h,form=mapOf("communityId" to "1"));return result(r.optString("code"),auth=setOf("401"),captcha=setOf("403"))}
         if(p.size!=3 || p[0]!="game")return SignResult("needs_action","未获取到游戏角色，请重新绑定")
-        fun state()=http.call("GET",base+"/apihub/awapi/signin/state",h,query=mapOf("gameId" to p[1]))
-        val s=state()
-        if(s.optString("code")!="0")return result(s.optString("code"),auth=setOf("401","402"),captcha=setOf("403"))
-        val stateData=s.optJSONObject("data")
-        if(stateData?.opt("todaySign") !is Boolean)throw SignError("protocol","塔吉多状态响应缺少签到状态，已停止提交")
-        if(stateData.optBoolean("todaySign"))return SignResult("already","游戏状态确认今日已签")
-        val r=http.call("POST",base+"/apihub/awapi/sign",h,form=mapOf("roleId" to p[2],"gameId" to p[1]))
-        return result(r.optString("code"),auth=setOf("401","402"),captcha=setOf("403"))
+        val gameId=p[1];val roleId=p[2]
+        fun readState()=http.call("GET",base+"/apihub/awapi/signin/state",h,query=mapOf("gameId" to gameId))
+        val s=readState()
+        if(s.optString("code")!="0")return result(s.optString("code"),auth=setOf("401"),captcha=setOf("403"))
+        val data=s.optJSONObject("data")
+        if(data?.opt("todaySign") !is Boolean)throw SignError("protocol","塔吉多状态响应缺少签到状态，已停止提交")
+        val stateRole=roleIdOf(data)
+        // A state reply that names another role must stop the flow: this target's answer could not be attributed.
+        if(stateRoleMismatch(roleId,stateRole))return SignResult("uncertain","官方状态响应对应其他角色，已停止提交；请在官方应用核对",providerCode=safeCode(s.optString("code")))
+        val authorized=if(stateRole.isNotBlank())setOf(stateRole) else authorizedRoles(c,persist,gameId).toSet()
+        if(taggedRoleProof(roleId,authorized,s.optString("code"),data.optString("gameId"),gameId,stateRole,data.opt("todaySign")))
+            return SignResult("already","游戏状态确认今日已签",resultSource=ResultSource.OFFICIAL,providerCode=safeCode(s.optString("code")),verificationMethod=VerifyMethod.STATE,verifiedAt=SignRepository.now())
+        if(data.optBoolean("todaySign")||roleId !in authorized)
+            return SignResult("uncertain","官方状态无法归属当前角色，已停止提交；请在官方应用核对",providerCode=safeCode(s.optString("code")),verificationMethod=VerifyMethod.STATE)
+        val r=http.call("POST",base+"/apihub/awapi/sign",h,form=mapOf("roleId" to roleId,"gameId" to gameId))
+        val outcome=result(r.optString("code"),auth=setOf("401"),captcha=setOf("403"))
+        if(outcome.status!="accepted")return outcome
+        // ONE bounded post-submission read, and only one. It may upgrade the acceptance ONLY when the answer is
+        // attributable to THIS role; otherwise the submission stays `accepted` and no extra role is inferred.
+        val verify=runCatching{readState()}.getOrNull()
+        val vData=verify?.optJSONObject("data")
+        val vRole=roleIdOf(vData)
+        if(verify==null||vData==null||stateRoleMismatch(roleId,vRole))
+            return SignResult("accepted","提交已接受，但状态复核未完成或不对应本角色；请先核对，未重新提交",resultSource=ResultSource.ACCEPTED,providerCode=outcome.providerCode,verificationMethod=VerifyMethod.SUBMITTED)
+        val vAuthorized=if(vRole.isNotBlank())setOf(vRole) else authorized
+        val proven=taggedRoleProof(roleId,vAuthorized,verify.optString("code"),vData.optString("gameId"),gameId,vRole,vData.opt("todaySign"))
+        return if(proven)SignResult("success","签到成功，官方状态已确认",resultSource=ResultSource.OFFICIAL,providerCode=safeCode(verify.optString("code")),verificationMethod=VerifyMethod.STATE,verifiedAt=SignRepository.now())
+            else SignResult("accepted","提交已接受，但官方尚未确认本角色今日状态；请先核对，未重新提交",resultSource=ResultSource.ACCEPTED,providerCode=outcome.providerCode,verificationMethod=VerifyMethod.SUBMITTED)
     }
 }
 
@@ -242,7 +327,7 @@ class KuroBBSAdapter(private val http:Transport) : ProviderAdapter {
         persist()
         if(c.optString("userId").isBlank()) {
             val r=http.call("POST",base+"/user/mineV2",headers(c),form=emptyMap())
-            if(r.optString("code")!="200")throw SignError("auth","库街区账号读取失败，请重新授权")
+            if(r.optString("code")!="200")throw SignError("auth","库街区账号读取失败，请重新授权（业务码 ${safeCode(r.optString("code"))}）")
             c.put("userId",r.optJSONObject("data")?.optJSONObject("mine")?.optString("userId").orEmpty());required(c,"userId");persist()
         }
         val items=mutableListOf<SignTarget>()
@@ -252,7 +337,7 @@ class KuroBBSAdapter(private val http:Transport) : ProviderAdapter {
             val configured=c.optJSONObject("roleIds")?.optJSONArray(gid)
             val roles=if(configured!=null)(0 until configured.length()).map{JSONObject().put("roleId",configured.getString(it))} else {
                 val r=http.call("POST",base+"/user/role/findRoleList",headers(c),form=mapOf("gameId" to gid))
-                if(r.optString("code")!="200")throw SignError("protocol","库街区角色查询失败")
+                if(r.optString("code")!="200")throw SignError("protocol","库街区角色查询失败（业务码 ${safeCode(r.optString("code"))}）")
                 r.optJSONArray("data")?.let{a->(0 until a.length()).mapNotNull{a.optJSONObject(it)}} ?: r.optJSONObject("data")?.let{it.rows("list").ifEmpty{it.rows("roleList")}}.orEmpty()
             }
             roles.forEach{role->val id=role.optString("roleId");if(id.isNotBlank())items.add(SignTarget("game|$gid|$id",(if(gid=="3")"鸣潮" else "战双帕弥什")+" · $id",role.optString("serverId").takeIf{it.isNotBlank()}))}
@@ -267,6 +352,8 @@ class KuroBBSAdapter(private val http:Transport) : ProviderAdapter {
             p.size==3&&p[0]=="game"&&p[1] in servers -> http.call("POST",base+"/encourage/signIn/v2",headers(c,true),form=mapOf("gameId" to p[1],"serverId" to (t.serverId ?: servers.getValue(p[1])),"roleId" to p[2],"userId" to c.getString("userId"),"reqMonth" to "%02d".format(ZonedDateTime.now(SignRepository.TZ).monthValue)))
             else -> return SignResult("needs_action","未发现游戏角色，请在库街区绑定")
         }
+        // Kuro exposes no verified read-only status we can attribute to one role, so a 200 is an ACCEPTANCE
+        // (`success` + accepted + submitted), never an official confirmation. 220 is its explicit auth failure.
         return result(r.optString("code"),ok="200",already=setOf("1511"),auth=setOf("220"))
     }
 }

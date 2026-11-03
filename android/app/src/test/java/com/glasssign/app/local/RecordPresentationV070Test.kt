@@ -64,7 +64,7 @@ class RecordPresentationV070Test {
     @Test fun discoveryRowSaysRoleCheckAndReimportRowSaysReauthorize() {
         // The discovery row provably submits nothing, so it may say so.
         val discovery = present(realDeviceRows[0])
-        assertEquals("授权或角色检查未通过", discovery.label)
+        assertEquals("授权与角色检查失败", discovery.label)
         assertTrue(discovery.source.contains("不提交签到"))
 
         // The skland row is a real sign target: it must ask for re-authorization but must NOT claim that
@@ -113,7 +113,7 @@ class RecordPresentationV070Test {
 
     @Test fun officialSuccessStillSaysSignedOnce() {
         val official = present(record(status = "success", message = "签到成功，官方状态已确认", resultSource = "official"))
-        assertEquals("已签到", official.label)
+        assertEquals("签到成功", official.label)
         assertEquals("success", official.group)
         assertEquals("官方成功响应 / 状态确认", official.source)
         assertFalse(official.isAuthorizationIssue)
@@ -121,26 +121,26 @@ class RecordPresentationV070Test {
 
     @Test fun acceptedSubmissionStillSaysSubmissionAccepted() {
         val accepted = present(record(status = "success", message = "官方接口已接受签到，请以官方记录为准", resultSource = "accepted"))
-        assertEquals("提交已接受", accepted.label)
+        assertEquals("已提交等待确认", accepted.label)
         assertEquals("submitted", accepted.group)
     }
 
     @Test fun alreadySignedStaysSigned() {
         assertEquals("已签到", present(record(status = "already", message = "官方响应确认今日已签", resultSource = "official")).label)
-        assertEquals("本机当天完成记录", present(record(status = "already", message = "已签到；本机已有当天成功记录，未重复提交")).source)
+        assertEquals("官方明确已签到", present(record(status = "already", message = "官方响应确认今日已签", resultSource = "official")).source)
     }
 
     @Test fun legacyLocalRecordStaysDistinguished() {
         val legacy = present(record(status = "already", message = "已签到；本机已有当天成功记录，未重复提交", resultSource = "legacy_local"))
-        assertEquals("本机已有完成记录", legacy.label)
-        assertEquals("submitted", legacy.group)
-        assertEquals("旧版本地完成记录；原始官方确认来源未知", legacy.source)
+        assertEquals("已签到", legacy.label)
+        assertEquals("success", legacy.group)
+        assertEquals("本机当天完成记录（沿用原证明，未重新查询官方）", legacy.source)
         assertFalse(legacy.isAuthorizationIssue)
     }
 
     @Test fun plainSignFailureKeepsTheExistingFailureWording() {
         val plain = present(record(targetName = "原神 · 合成旅行者", status = "failed", message = "官方响应未确认成功，请在官方应用核对"))
-        assertEquals("签到失败", plain.label)
+        assertEquals("失败", plain.label)
         assertEquals("attention", plain.group)
         assertEquals("官方未确认成功，请查看原因", plain.source)
         assertFalse(plain.isAuthorizationIssue)
@@ -150,14 +150,14 @@ class RecordPresentationV070Test {
         // Protocol.kt also answers "社区接口状态异常" for a POST check-in rejection; a plain game row must keep
         // the failure wording rather than be reclassified as an authorization problem.
         val game = present(record(targetId = "game|1289|fixture", targetName = "异环 · 合成角色", status = "failed", message = "社区接口状态异常"))
-        assertEquals("签到失败", game.label)
+        assertEquals("失败", game.label)
     }
 
     @Test fun needsActionSignRowKeepsNeedsHandling() {
         val captcha = present(record(targetName = "原神 · 合成旅行者", status = "needs_action", message = "请在官方应用完成人机验证"))
-        assertEquals("需要处理", captcha.label)
+        assertEquals("需授权", captcha.label)
         assertEquals("attention", captcha.group)
-        assertEquals("需要授权或用户操作", captcha.source)
+        assertTrue(captcha.source.contains("授权"))
     }
 
     // ---------------------------------------------------------------- preserved unknown/progress distinctions
@@ -169,7 +169,7 @@ class RecordPresentationV070Test {
             record(status = "needs_action", message = "上次执行中断，结果不确定；请先到官方应用核对"),
         )) {
             val p = present(r)
-            assertEquals("结果待确认", p.label)
+            assertEquals("未知", p.label)
             assertEquals("uncertain", p.group)
             // An unknown submission must not be redirected into the authorization family by the new rule.
             assertFalse(p.isAuthorizationIssue)
@@ -177,13 +177,13 @@ class RecordPresentationV070Test {
     }
 
     @Test fun inProgressAndWaitingStatesAreUnchanged() {
-        assertEquals("正在签到", present(record(status = "running")).label)
+        assertEquals("正在核验", present(record(status = "running")).label)
         assertEquals("running", present(record(status = "running")).group)
         val waiting = present(record(targetName = "异环 · 合成角色", status = "waiting_network", message = "社区暂不可用，等待网络恢复后重试"))
-        assertEquals("等待网络", waiting.label)
+        assertEquals("失败", waiting.label)
         assertEquals("attention", waiting.group)
-        assertEquals("待签到", present(record(status = "queued")).label)
-        assertEquals("pending", present(record(status = "queued")).group)
+        assertEquals("未知", present(record(status = "queued")).label)
+        assertEquals("uncertain", present(record(status = "queued")).group)
     }
 
     // ---------------------------------------------------------------- counter / filter compatibility

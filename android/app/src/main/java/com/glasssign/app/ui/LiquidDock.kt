@@ -18,6 +18,9 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -35,11 +38,14 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -131,8 +137,8 @@ internal object GlassOptics {
     const val LitAlpha=.5f
     const val AmbientAlpha=.38f
     /** Light on the bar vs on the moving capsule: the capsule is the thicker, brighter piece of glass. */
-    const val BarEdgeLight=.4f
-    const val CapsuleEdgeLight=.85f
+    const val BarEdgeLight=.18f
+    const val CapsuleEdgeLight=.30f
     /** Tint over the sampled backdrop. Low on purpose: text behind the bar must stay readable. */
     const val BarTintAlpha=.22f
     const val CapsuleTintAlpha=.075f
@@ -169,6 +175,57 @@ internal fun glassCircleMap(x:Float):Float {
     return 1f-Math.sqrt((1f-t*t).toDouble()).toFloat()
 }
 @Composable fun liquidDockHeight(fontScale:Float)=if(fontScale>1.3f)88.dp else 72.dp
+
+/**
+ * Total vertical space the dock overlay occupies, in px, from the screen's bottom edge up:
+ * the bar itself, plus the transparent [GlassTokens.lift] gap, plus the navigation-bar inset the dock
+ * applies via `navigationBarsPadding()`.
+ *
+ * Why a pure function: the page list needs exactly this number as its bottom `contentPadding`, and the
+ * hard-coded 160.dp it used before was wrong for gesture navigation (small inset), for a tall bar at
+ * large font scale, and in landscape where the dock is capped. Keeping it pure means the arithmetic is
+ * pinned by JVM tests instead of by a screenshot.
+ *
+ * [navBottomPx] is the navigation-bar inset ALREADY resolved to px. It is added exactly once here and the
+ * dock applies it via `navigationBarsPadding()`; callers must therefore NOT add it again, or the last card
+ * would stop a nav-bar too early.
+ */
+internal fun dockOverlapPx(barHeightPx:Float,liftPx:Float,navBottomPx:Float):Float =
+    (barHeightPx.coerceAtLeast(0f)+liftPx.coerceAtLeast(0f)+navBottomPx.coerceAtLeast(0f))
+
+/**
+ * Bottom content padding for the page list, derived from the measured dock overlap.
+ *
+ * [gapPx] is a small breathing space so the last card clears the dock's shadow instead of touching it.
+ * The result is never below [minPx], because a zero or collapsed dock (hidden for a modal, or mid-cold-
+ * start before the first layout) must not remove the list's bottom padding entirely.
+ */
+internal fun dockContentPaddingPx(overlapPx:Float,gapPx:Float,minPx:Float):Float {
+    val floor=if(minPx.isFinite())minPx.coerceAtLeast(0f) else 0f
+    if(!overlapPx.isFinite()) return floor
+    val safeGap=if(gapPx.isFinite())gapPx.coerceAtLeast(0f) else 0f
+    return (overlapPx.coerceAtLeast(0f)+safeGap).coerceAtLeast(floor)
+}
+
+/** Small breathing space between the last card and the dock's shadow. */
+internal val DockContentGap=8.dp
+
+/**
+ * Floor for the list's bottom padding while the dock has not measured itself yet (first frame, or the
+ * dock hidden behind a modal). One bar height at the 200% font scale is the tallest the dock can get, so
+ * the very first layout can never place the last card under it, and no nav inset is added here: the dock
+ * reports its own inset once it has one, which is what keeps the inset from being counted twice.
+ */
+internal val DockContentMin=96.dp
+
+/** Bottom content padding for the page list, in Dp, from the px the dock reported. */
+internal fun dockBottomPaddingPx(overlapPx:Float,density:Density):Dp {
+    val d=if(density.density>0f)density.density else 1f
+    val gap=DockContentGap.value*d
+    val min=DockContentMin.value*d
+    return (dockContentPaddingPx(overlapPx,gap,min)/d).dp
+}
+
 @Composable fun rememberBackdrop():PageBackdropState=rememberPageBackdrop(true)
 @Composable fun rememberPageBackdrop(blurEnabled:Boolean):PageBackdropState {
     val layer=rememberGraphicsLayer()
@@ -190,10 +247,19 @@ private const val DockSlots=4
  */
 private const val DockCommitDistance=.5f
 
-@Composable fun LiquidDock(selected:Int,onSelect:(Int)->Unit,source:GraphicsLayer,policy:GlassPolicy,enabled:Boolean=true,modifier:Modifier=Modifier) {
-    Dock(selected,onSelect,source,policy,enabled,modifier)
+/**
+ * @param onOverlapChange reports the dock's actual visible overlay height in px, measured after layout,
+ *   including the navigation-bar inset and the transparent lift gap. The page list uses it as its bottom
+ *   content padding so the last card can scroll entirely above the dock. It is reported only when the
+ *   value actually changes (integer px), so scrolling and dragging never cause a write.
+ *
+ * [onOverlapChange] is deliberately the LAST parameter: existing call sites pass a positional `Modifier`
+ * sixth, and inserting the callback before it would silently bind that Modifier to the wrong parameter.
+ */
+@Composable fun LiquidDock(selected:Int,onSelect:(Int)->Unit,source:GraphicsLayer,policy:GlassPolicy,enabled:Boolean=true,modifier:Modifier=Modifier,onOverlapChange:(Float)->Unit={}) {
+    Dock(selected,onSelect,source,policy,enabled,modifier,onOverlapChange)
 }
-@Composable fun LiquidDock(selected:Int,onSelect:(Int)->Unit,backdrop:PageBackdropState,policy:GlassPolicy,enabled:Boolean=true,modifier:Modifier=Modifier) {
+@Composable fun LiquidDock(selected:Int,onSelect:(Int)->Unit,backdrop:PageBackdropState,policy:GlassPolicy,enabled:Boolean=true,modifier:Modifier=Modifier,onOverlapChange:(Float)->Unit={}) {
     // Do not build a native sampling effect over an empty first-frame RenderNode. Keep the dock
     // visible and interactive using its opaque fallback until the page has actually been recorded.
     var sampledFrameReady by remember(backdrop){mutableStateOf(false)}
@@ -213,14 +279,14 @@ private const val DockCommitDistance=.5f
     // Material activation replaces the provisional layer once, so its first opaque display list
     // cannot retain an empty shared-input cache. This key is stable throughout navigation/dragging.
     key(sampledFrameReady) {
-        Dock(selected,onSelect,backdrop.cached,policy.copy(blur=policy.blur&&sampledFrameReady),enabled,modifier)
+        Dock(selected,onSelect,backdrop.cached,policy.copy(blur=policy.blur&&sampledFrameReady),enabled,modifier,onOverlapChange)
     }
 }
 @Composable fun LiquidDock(selected:Int,onSelect:(Int)->Unit,source:GraphicsLayer,policy:GlassPolicy,modifier:Modifier) {
     Dock(selected,onSelect,source,policy,true,modifier)
 }
 
-@Composable private fun Dock(selected:Int,onSelect:(Int)->Unit,source:GraphicsLayer,policy:GlassPolicy,enabled:Boolean,modifier:Modifier) {
+@Composable private fun Dock(selected:Int,onSelect:(Int)->Unit,source:GraphicsLayer,policy:GlassPolicy,enabled:Boolean,modifier:Modifier,onOverlapChange:(Float)->Unit={}) {
     val colors=MaterialTheme.colorScheme
     val dark=colors.background.luminance()<.5f
     val off=LocalAppearance.current.glassMode=="off"
@@ -278,8 +344,36 @@ private const val DockCommitDistance=.5f
     }
     // The border stays as the non-blur (API<31 / light material) rim. With blur on, the SDF edge light above
     // supplies the rim, so this hairline only adds the thin hairline the reference keeps at the very edge.
-    val edge=Brush.linearGradient(listOf(Color.White.copy(alpha=if(policy.blur).22f else if(dark).38f else .8f),colors.outlineVariant.copy(alpha=.15f),Color.White.copy(alpha=if(policy.blur).10f else if(dark).14f else .45f)))
-    Box(modifier.zIndex(1f).fillMaxWidth().navigationBarsPadding().padding(horizontal=GlassTokens.margin).padding(bottom=GlassTokens.lift),contentAlignment=Alignment.Center) {
+    /*
+     * Rim strategy. The reported defect was a stark, uniform WHITE outline around the whole bar: a 1.dp
+     * white `border` drew a complete ring, and the SDF edge light then drew a second, brighter ring on top
+     * of it. Two white rings at full circumference read as paint, not glass.
+     *
+     * Now they are mutually exclusive and one-directional:
+     *  - with blur on, the SDF edge light is the only rim (it is already directional: brightness follows
+     *    |dot(grad(SDF), lightDir)|, so one side is lit and the opposite side stays dark);
+     *  - with blur off (API<31, or "off" mode), a faint hairline keeps the shape legible, never full white.
+     * The container gradient is top-light/bottom-dark, so even that hairline is not uniform.
+     */
+    val edge=Brush.linearGradient(listOf(
+        Color.White.copy(alpha=if(dark).16f else .26f),
+        colors.outlineVariant.copy(alpha=.10f),
+        Color.White.copy(alpha=if(dark).05f else .10f),
+    ))
+    // Actual overlay height, reported after layout. `navigationBarsPadding()` resolves the inset inside the
+    // layout phase, so it is read from the same node the padding is applied to instead of from the window
+    // insets: that way the number is exactly what the dock occupies, adds the inset once, and stays correct
+    // for gesture navigation, a tall bar at large font scale and the landscape width cap.
+    val navBottomPx=WindowInsets.navigationBars.getBottom(density).toFloat()
+    val liftPx=with(density){GlassTokens.lift.toPx()}
+    val reportOverlap by rememberUpdatedState(onOverlapChange)
+    // Last reported integer px, so the callback fires on a real change only (never per frame).
+    // Plain holder (no delegate): an IntArray cell needs no getValue/setValue operators, so this compiles without
+    // androidx.compose.runtime.{get,set}Value imports; `remember` keeps the same instance across recompositions.
+    val reportedOverlap=remember{intArrayOf(-1)}
+    Box(modifier.zIndex(1f).fillMaxWidth().onSizeChanged { size ->
+        if(size.height!=reportedOverlap[0]) {reportedOverlap[0]=size.height;reportOverlap(size.height.toFloat())}
+    }.navigationBarsPadding().padding(horizontal=GlassTokens.margin).padding(bottom=GlassTokens.lift),contentAlignment=Alignment.Center) {
         BoxWithConstraints(Modifier.widthIn(max=GlassTokens.maxWidth).fillMaxWidth().height(height)
             .onGloballyPositioned{position=it.positionInRoot()}
             .graphicsLayer{alpha=if(enabled)1f else 0f}
@@ -291,7 +385,11 @@ private const val DockCommitDistance=.5f
             // Smoked dark tint over the sample. Lower than a "frosted card" because the reference lets the
             // page text behind the bar stay legible; the darkening comes from this veil, not from opacity alone.
             Box(Modifier.matchParentSize().background(colors.surface.copy(alpha=if(off)1f else if(policy.blur)GlassOptics.BarTintAlpha else .97f)))
-            if(!off)Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.White.copy(alpha=if(dark).10f else .24f),Color.Transparent,Color.Black.copy(alpha=.05f)))).border(1.dp,edge,shape))
+            // Directional top highlight only (no full ring). The dark veil below it is what gives the bar its
+            // body, so the highlight is a sheen rather than an outline.
+            if(!off)Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.White.copy(alpha=if(dark).07f else .16f),Color.Transparent,Color.Black.copy(alpha=.06f)))))
+            // Hairline ONLY when there is no SDF edge light, so the two never stack into a white outline.
+            if(!off&&!policy.blur)Box(Modifier.matchParentSize().border(1.dp,edge,shape))
             if(!off&&policy.blur)GlassEdgeLight(GlassTokens.corner.value,GlassOptics.BarEdgeLight,Modifier.matchParentSize())
             if(enabled) {
                 val cellWidth=(maxWidth-12.dp)/4
@@ -315,8 +413,11 @@ private const val DockCommitDistance=.5f
                     // Selected item is a small accent-tinted capsule, not a white translucent block: the page
                     // sample stays visible through it, the accent only tints it.
                     Box(Modifier.matchParentSize().background(if(off)colors.primaryContainer else colors.primary.copy(alpha=if(policy.blur)GlassOptics.CapsuleTintAlpha else .12f)))
-                    if(!off)Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.White.copy(alpha=if(dark).12f else .3f),Color.Transparent)))
-                        .border(1.dp,Brush.linearGradient(listOf(Color.White.copy(alpha=if(dark).4f else .7f),colors.primary.copy(alpha=.10f),Color.White.copy(alpha=.14f))),lensShape))
+                    // Inner sheen: top-only, so the capsule reads as a lit convex surface rather than a
+                    // white ring. With blur on, the SDF edge light below supplies the rim and this border is
+                    // omitted entirely -- two rings were what produced the stark full-white outline.
+                    if(!off)Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.White.copy(alpha=if(dark).09f else .18f),Color.Transparent))))
+                    if(!off&&!policy.blur)Box(Modifier.matchParentSize().border(.5.dp,Brush.linearGradient(listOf(Color.White.copy(alpha=if(dark).20f else .30f),Color.Transparent,Color.White.copy(alpha=.06f))),lensShape))
                     if(!off&&policy.blur)GlassEdgeLight(50f,GlassOptics.CapsuleEdgeLight,Modifier.matchParentSize())
                 }
                 // Keep input on the ancestor of the selectable cells so physical taps reach them.
@@ -650,7 +751,7 @@ internal fun dockGestureKey(enabled:Boolean,motion:Boolean,cellPx:Int,padPx:Int)
         // so both sides of `alpha=alpha` would resolve to the receiver and the assignment would be a no-op.
         alpha=edgeAlpha
         compositingStrategy=if(ambient)CompositingStrategy.ModulateAlpha else CompositingStrategy.Offscreen
-    }.border(1.dp,Color.White,RoundedCornerShape(cornerDp.dp)))
+    }.border(.6.dp,Color.White,RoundedCornerShape(cornerDp.dp)))
 }
 
 /**

@@ -28,6 +28,62 @@ data class AuthorizationCheck(
     val checkedAt: String,
 )
 
+/**
+ * Explicit provenance metadata stored next to a record (`records.result_meta` / `sign_guards.result_meta`).
+ *
+ * WHY: the historical code guessed provenance from message substrings ("接受", "本机") both when writing and when
+ * reading. That made two different runs with identical wording indistinguishable, and it made "accepted by the
+ * interface" look like "confirmed by the official status endpoint". From schema 6 the writer states the facts and
+ * the reader only interprets them.
+ *
+ * This value is stored as a compact JSON object string. Every field has a safe default, so an old row (or an old
+ * parser) keeps working: [UNKNOWN] is the empty instance, which means "no explicit metadata recorded".
+ */
+data class ResultMeta(
+    /** "unknown" / "official" / "accepted" / "local_cache" / "legacy" — mirrors CheckRecord.resultSource. */
+    val source:String="" ,
+    val providerCode:String="",
+    val httpStatus:Int?=null,
+    /** How the fact was learned: "info" / "calendar" / "state" / "local_cache" / "" when unknown. */
+    val verificationMethod:String="",
+    /** ISO local time of the official confirmation, "" when no official confirmation happened. */
+    val verifiedAt:String="",
+    /** True only when the writer explicitly says the same request may be retried safely. */
+    val retryable:Boolean=false,
+    /** Per-run identifier so one click's writes can be told apart from earlier runs. */
+    val executionId:String="",
+) {
+    val isBlank:Boolean get()=source.isBlank()&&providerCode.isBlank()&&httpStatus==null&&verificationMethod.isBlank()&&verifiedAt.isBlank()&&!retryable&&executionId.isBlank()
+    fun encode():String=if(isBlank)"" else JSONObject().apply{
+        put("source",source)
+        if(providerCode.isNotBlank())put("providerCode",providerCode)
+        httpStatus?.let{put("httpStatus",it)}
+        if(verificationMethod.isNotBlank())put("verificationMethod",verificationMethod)
+        if(verifiedAt.isNotBlank())put("verifiedAt",verifiedAt)
+        if(retryable)put("retryable",true)
+        if(executionId.isNotBlank())put("executionId",executionId)
+    }.toString()
+    companion object {
+        val UNKNOWN=ResultMeta()
+        /** Tolerant parser: a broken or partial JSON blob degrades to the unknown metadata, never to a crash. */
+        fun decode(raw:String?):ResultMeta {
+            if(raw.isNullOrBlank())return UNKNOWN
+            return runCatching{
+                val json=JSONObject(raw)
+                ResultMeta(
+                    source=json.optString("source"),
+                    providerCode=json.optString("providerCode"),
+                    httpStatus=if(json.has("httpStatus")&&!json.isNull("httpStatus"))json.optInt("httpStatus") else null,
+                    verificationMethod=json.optString("verificationMethod"),
+                    verifiedAt=json.optString("verifiedAt"),
+                    retryable=json.optBoolean("retryable",false),
+                    executionId=json.optString("executionId"),
+                )
+            }.getOrDefault(UNKNOWN)
+        }
+    }
+}
+
 data class CheckRecord(
     val accountId: String,
     val targetId: String,
@@ -38,7 +94,18 @@ data class CheckRecord(
     val updatedAt: String,
     val startedAt:String="",
     val resultSource:String="legacy",
-)
+    /** Explicit provenance. Always appended last so every existing positional construction keeps compiling. */
+    val resultMeta:ResultMeta=ResultMeta.UNKNOWN,
+) {
+    // Read-through accessors: the explicit metadata is the source of truth, the columns are the fallback for rows
+    // written before schema 6. Never derived from [message] wording.
+    val providerCode:String get()=resultMeta.providerCode
+    val httpStatus:Int? get()=resultMeta.httpStatus
+    val verificationMethod:String get()=resultMeta.verificationMethod
+    val verifiedAt:String get()=resultMeta.verifiedAt
+    val retryable:Boolean get()=resultMeta.retryable
+    val executionId:String get()=resultMeta.executionId
+}
 
 data class Overview(
     val date: String,
@@ -101,6 +168,9 @@ fun parseRecord(json: JSONObject): CheckRecord = CheckRecord(
     message = json.optString("message"),
     attempts = json.optInt("attempts", 1),
     updatedAt = json.optString("updated_at"),
+    // Server payloads predate the metadata column: absent keys keep the historical defaults exactly.
+    resultSource = json.optString("result_source", "legacy"),
+    resultMeta = ResultMeta.decode(json.optString("result_meta")),
 )
 
 fun parseRecords(array: JSONArray?): List<CheckRecord> = array.objects().map(::parseRecord)

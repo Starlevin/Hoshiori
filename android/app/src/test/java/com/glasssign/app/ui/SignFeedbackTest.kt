@@ -192,7 +192,7 @@ class SignFeedbackTest {
         ))
         val row = f.gameRows.single()
         assertEquals(RowState.SUBMITTED, row.state)
-        assertEquals("提交已接受", row.label)
+        assertEquals("已提交等待确认", row.label)
         assertEquals(0, f.completedCount)
         assertEquals("headline must show 0 signed", "已签到 0 / 1 个游戏", f.headline)
         assertTrue(f.breakdown, f.breakdown.contains("提交已接受 1"))
@@ -256,9 +256,11 @@ class SignFeedbackTest {
         val f = feedback(accounts, tasks, listOf(
             record("a", "genshin|u|s", "原神 · 合成旅行者", "already", "已签到；本机已有当天成功记录，未重复提交", "legacy_local"),
         ))
-        assertEquals(RowState.SUBMITTED, f.gameRows.single().state)
-        assertEquals(0, f.completedCount)
-        assertTrue(f.gameRows.single().detail, f.gameRows.single().detail.contains("核对"))
+        // The requested contract: the label is a completed check-in, but the SOURCE must not claim a fresh official
+        // query — it is this device's own record.
+        assertEquals(RowState.COMPLETED, f.gameRows.single().state)
+        assertEquals(1, f.completedCount)
+        assertTrue(f.gameRows.single().source, f.gameRows.single().source.contains("本机"))
     }
 
     // ===== 5. partial success =======================================================================

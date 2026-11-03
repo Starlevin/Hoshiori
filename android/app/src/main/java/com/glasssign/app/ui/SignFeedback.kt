@@ -55,9 +55,9 @@ internal data class Tone(val label:String,val icon:ImageVector,val color:Color)
 internal fun toneFor(group:String):Tone {
     val c=MaterialTheme.colorScheme
     return when(group) {
-        RowState.COMPLETED, "success" -> Tone("已完成",Icons.Rounded.CheckCircle,c.primary)
-        RowState.SUBMITTED, "submitted" -> Tone("已提交",Icons.Rounded.Outbox,c.tertiary)
-        RowState.UNCERTAIN, "uncertain" -> Tone("结果待确认",Icons.Rounded.HelpOutline,Amber)
+        RowState.COMPLETED, "success" -> Tone("已完成",Icons.Rounded.CheckCircle,signStateColor("success"))
+        RowState.SUBMITTED, "submitted" -> Tone("已提交等待确认",Icons.Rounded.Outbox,signStateColor("accepted"))
+        RowState.UNCERTAIN, "uncertain" -> Tone("结果未知",Icons.Rounded.HelpOutline,signStateColor("unknown"))
         RowState.RUNNING, "running" -> Tone("执行中",Icons.Rounded.Sync,c.secondary)
         RowState.WAITING -> Tone("等待网络",Icons.Rounded.CloudOff,Amber)
         RowState.ATTENTION -> Tone("需要处理",Icons.Rounded.ErrorOutline,c.error)

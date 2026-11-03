@@ -9,6 +9,8 @@ import android.provider.Settings
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
@@ -206,6 +208,7 @@ internal data class RecordRow(
     /** True when the row is the user's problem to fix: the record itself failed/needs action or
      *  present() groups it as attention/uncertain/submitted. */
     val actionable:Boolean,
+    val semanticStatus:String="unknown",
 )
 
 internal fun rowOf(record:CheckRecord):RecordRow {
@@ -215,6 +218,7 @@ internal fun rowOf(record:CheckRecord):RecordRow {
         started=qTime(record.startedAt),
         updated=qTime(record.updatedAt),
         actionable=record.status=="failed"||record.status=="needs_action"||p.group in ATTENTION_GROUPS,
+        semanticStatus=semanticState(record),
     )
 }
 
@@ -303,7 +307,8 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
     val visibleRecords=remember(ui.timeline,ui.byId,scope.resultFilter,scope.providerFilter,scope.accountFilter,scope.gameFilter){
         ui.timeline.filter{e->
             val acc=ui.byId[e.record.accountId]
-            (scope.resultFilter=="all"||present(e.record).group==scope.resultFilter)&&
+            (scope.resultFilter=="all"||present(e.record).group==scope.resultFilter||
+                (scope.resultFilter=="uncertain"&&present(e.record).group=="submitted"))&&
                 (scope.providerFilter=="all"||acc?.provider==scope.providerFilter)&&
                 (scope.accountFilter=="all"||e.record.accountId==scope.accountFilter)&&
                 (scope.gameFilter=="all"||acc?.let{GameCatalog.gameForTarget(it.provider,e.record.targetId)}==scope.gameFilter)
@@ -323,6 +328,15 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
     val policy=currentGlassPolicy()
     // The dock samples the page content into a layer; must match policy.blur exactly.
     val backdrop=rememberPageBackdrop(policy.blur)
+    /*
+     * Actual dock overlay height in px, measured by the dock after layout (bar + lift + navigation-bar
+     * inset). Held here so the list's bottom contentPadding follows the real value instead of a fixed
+     * 160.dp, which was wrong for gesture navigation, for the 200% font bar and in landscape.
+     * It is a plain state holder, written only when the integer px changes, and its reader is the
+     * contentPadding expression below -- not the dock, so this cannot loop.
+     */
+    val dockOverlap=remember{mutableFloatStateOf(0f)}
+    val densityNow=LocalDensity.current
 
     Box(Modifier.fillMaxSize().background(colors.background)) {
         // [LAYOUT-vs-DRAW] Box owns the snapshot: everything inside this Box is the page, and the dock is a
@@ -341,7 +355,7 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
                     // rows instead use Modifier.bleed(PAGE_INSET) to cancel the inset for their own scrollable
                     // viewport only (see RecordsPage), leaving the cards untouched.
                     contentPadding=PaddingValues(start=PAGE_INSET,end=PAGE_INSET,top=12.dp,
-                        bottom=160.dp+WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()),
+                        bottom=dockBottomPaddingPx(dockOverlap.floatValue,densityNow)),
                     verticalArrangement=Arrangement.spacedBy(16.dp),
                 ) {
                     item(key="header",contentType="header") {
@@ -362,7 +376,8 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
         }
         // [H1] The only place WindowInsets are read. Its composition contains the dock call and nothing else,
         // so an IME frame recomposes ~2 composables instead of the page body + four branches.
-        if(!modalOpen)DockOverlay(backdrop=backdrop,policy=policy,selected=scope.tab,onSelect=onSelect,enabled=true)
+        if(!modalOpen)DockOverlay(backdrop=backdrop,policy=policy,selected=scope.tab,onSelect=onSelect,enabled=true,
+            onOverlapChange={px->dockOverlap.floatValue=px})
         // Feedback pass: a specific failure now renders as the home "这一步没有完成" card with its own fix buttons
         // (see ui/SignFeedback.kt), so only neutral confirmations still use the transient Snackbar -- one failure no
         // longer disappears after 6.5 seconds with no way to act on it.
@@ -375,7 +390,7 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
     if(scope.plan)SettingsDialog(scheduleEnabled=s.scheduleEnabled,dailyTime=s.dailyTime,reduceMotion=s.reduceMotion,busy=s.jobRunning,onDismiss={scope.plan=false},onSave={enabled,time->vm.saveSchedule(enabled,time);scope.plan=false;if(enabled&&android.os.Build.VERSION.SDK_INT>=33)permission.launch(android.Manifest.permission.POST_NOTIFICATIONS)},onClear=vm::clearCredentials,onReduceMotion=vm::setReduceMotion)
     scope.rename?.let{account->var alias by remember(account.id){mutableStateOf(account.nickname)};AlertDialog(onDismissRequest={scope.rename=null},title={Text("编辑账号备注")},text={OutlinedTextField(alias,{alias=it.take(40)},label={Text("备注")})},confirmButton={TextButton(onClick={vm.rename(account.id,alias);scope.rename=null},enabled=alias.isNotBlank()){Text("保存")}},dismissButton={TextButton(onClick={scope.rename=null}){Text("取消")}})}
     scope.danger?.let{(account,kind)->AlertDialog(onDismissRequest={scope.danger=null},title={Text(when(kind){"revoke"->"解除授权？";"history"->"删除历史明细？";else->"删除账号？"})},text={Text("${providerMeta(account.provider).title} · ${safeLabel(account.nickname)}\n"+when(kind){"revoke"->"仅清除加密授权，保留账号、角色、暂停偏好与历史。";"history"->"只删除该账号历史明细，不删除授权或改变计划。当天提交保护仍保留，未知结果不会重发。";else->"删除此账号及所属角色、授权和全部本机记录。其他账号不受影响。"})},confirmButton={TextButton(onClick={when(kind){"revoke"->vm.revoke(account.id);"history"->vm.clearRecords(account.id);else->{vm.deleteAccount(account.id,account.nickname);scope.detail=null}};scope.danger=null}){Text("确认",color=colors.error)}},dismissButton={TextButton(onClick={scope.danger=null}){Text("取消")}})}
-    scope.record?.let{entry->val r=entry.record;val account=ui.byId[r.accountId];val row=remember(entry){rowOf(r)};AlertDialog(onDismissRequest={scope.record=null},title={Text(row.presentation.label)},text={Column(verticalArrangement=Arrangement.spacedBy(10.dp)){Text("${entry.day} · ${safeLabel(account?.nickname.orEmpty())}");Text(safeLabel(r.targetName));Text(row.presentation.source);Text(safeLabel(r.message));Text("开始：${row.started}\n结束 / 最近状态：${row.updated}\n提交尝试：${r.attempts}")}},confirmButton={TextButton(onClick={scope.record=null}){Text("关闭")}},dismissButton={Column{if(account!=null&&entry.day==s.overview?.date)TextButton(onClick={vm.reconcile(account.id,r.targetId);scope.record=null}){Text("校验状态（不提交）")};if(account!=null)TextButton(onClick={scope.record=null;scope.tab=1;scope.detail=account.id}){Text("修复账号")};if(account!=null)TextButton(onClick={runCatching{context.startActivity(Intent(Intent.ACTION_VIEW,android.net.Uri.parse(com.glasssign.app.login.LoginPlatforms.of(account.provider).startUrl)))}}){Text("打开官方页面")}}})}
+    scope.record?.let{entry->val r=entry.record;val account=ui.byId[r.accountId];val row=remember(entry){rowOf(r)};AlertDialog(onDismissRequest={scope.record=null},title={Text(row.presentation.label)},text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)){Text("${entry.day} · ${safeLabel(account?.nickname.orEmpty())}");Text(safeLabel(r.targetName));Text(row.presentation.source);Text(safeLabel(r.message));Text(recordDiagnostics(r),style=MaterialTheme.typography.bodySmall);Text("开始：${row.started}\n结束 / 最近状态：${row.updated}\n提交尝试：${r.attempts}")}},confirmButton={TextButton(onClick={scope.record=null}){Text("关闭")}},dismissButton={Column{if(account!=null&&entry.day==s.overview?.date)TextButton(onClick={vm.reconcile(account.id,r.targetId);scope.record=null}){Text("校验状态（不提交）")};if(account!=null)TextButton(onClick={scope.record=null;scope.tab=1;scope.detail=account.id}){Text("修复账号")};if(account!=null)TextButton(onClick={runCatching{context.startActivity(Intent(Intent.ACTION_VIEW,android.net.Uri.parse(com.glasssign.app.login.LoginPlatforms.of(account.provider).startUrl)))}}){Text("打开官方页面")}}})}
 }
 
 /**
@@ -437,15 +452,18 @@ private fun onSettingsAction(context:Context,permission:androidx.activity.result
  *
  * Behaviour is intentionally unchanged: the dock disappears while the IME is up (as before) and `enabled`
  * is forwarded to the dock, which makes it invisible to TalkBack when false.
+ *
+ * [onOverlapChange] forwards the dock's measured overlay height to the page list. It is a plain lambda, so
+ * the IME insets read here still do not leak into the page body's composition.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun BoxScope.DockOverlay(backdrop:PageBackdropState,policy:GlassPolicy,selected:Int,onSelect:(Int)->Unit,enabled:Boolean) {
+internal fun BoxScope.DockOverlay(backdrop:PageBackdropState,policy:GlassPolicy,selected:Int,onSelect:(Int)->Unit,enabled:Boolean,onOverlapChange:(Float)->Unit={}) {
     val density=LocalDensity.current
     val imeVisible=WindowInsets.isImeVisible
     val imeBottom=WindowInsets.ime.getBottom(density)
     if(imeBottom==0&&!imeVisible) {
-        LiquidDock(selected=selected,onSelect=onSelect,backdrop=backdrop,policy=policy,enabled=enabled,modifier=Modifier.align(Alignment.BottomCenter))
+        LiquidDock(selected=selected,onSelect=onSelect,backdrop=backdrop,policy=policy,enabled=enabled,onOverlapChange=onOverlapChange,modifier=Modifier.align(Alignment.BottomCenter))
     }
 }
 
@@ -571,22 +589,30 @@ private fun LazyListScope.AccountDetailPage(scope:ScopeState,ui:PageUiState,a:Ac
  * Touch targets and font size are untouched (FilterChip keeps its M3 48dp height); long provider/account
  * names are ellipsized inside the chip instead of widening it without bound.
  */
+@OptIn(ExperimentalFoundationApi::class)
 private fun LazyListScope.RecordsPage(scope:ScopeState,ui:PageUiState,vm:VmActions,visible:List<TimelineRecord>) {
     item(key="filters",contentType="filters"){Column {
-        Row(Modifier.fillMaxWidth().bleed(PAGE_INSET).horizontalScroll(rememberScrollState()).padding(horizontal=PAGE_INSET),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically){
-            listOf("all" to "全部","success" to "成功","attention" to "需要处理","uncertain" to "待确认").forEach{(id,label)->FilterChip(scope.resultFilter==id,{scope.resultFilter=id},label={Text(label,maxLines=1)})}
+        val statusScroll=rememberScrollState()
+        val metadataScroll=rememberScrollState()
+        Row(Modifier.fillMaxWidth().horizontalScroll(statusScroll),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically){
+            listOf("all" to "全部","success" to "已完成","attention" to "需要处理","uncertain" to "待确认").forEach{(id,label)->
+                val requester=remember { BringIntoViewRequester() }
+                LaunchedEffect(scope.resultFilter) { if(scope.resultFilter==id)requester.bringIntoView() }
+                FilterChip(scope.resultFilter==id,{scope.resultFilter=id},modifier=Modifier.bringIntoViewRequester(requester),label={Text(label,maxLines=1)})
+            }
         }
-        Row(Modifier.fillMaxWidth().bleed(PAGE_INSET).horizontalScroll(rememberScrollState()).padding(horizontal=PAGE_INSET),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically){
+        Row(Modifier.fillMaxWidth().horizontalScroll(metadataScroll),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically){
             QFilter("平台",scope.providerFilter,providerOptions){scope.providerFilter=it}
             QFilter("账号",scope.accountFilter,accountOptions(ui)){scope.accountFilter=it}
             QFilter("游戏",scope.gameFilter,gameOptions){scope.gameFilter=it}
         }
+        if(statusScroll.maxValue>0||metadataScroll.maxValue>0)Text("左右滑动查看全部筛选项",style=MaterialTheme.typography.labelSmall,color=Muted)
     }}
     if(visible.isEmpty())item(key="empty",contentType="empty"){QCard{Text("暂无符合条件的记录",style=MaterialTheme.typography.titleMedium);Text("签到后按日期、账号与游戏保留结果。",color=Muted)}}
     items(visible,key={it.day+"|"+it.record.accountId+"|"+it.record.targetId},contentType={"record"}){entry->
         RecordCard(entry,ui.byId[entry.record.accountId]?.nickname.orEmpty()){scope.record=entry;scope.tab=2}
     }
-    item(key="retry",contentType="retry"){Column{if(ui.timeline.any{it.record.status in RETRYABLE})OutlinedButton(onClick={vm.runNow()},enabled=ui.accounts.isNotEmpty()){Text("重试可安全重试的未完成项")};Text("失败重试遵守间隔与最多3次限制；待确认提交不重发，点击记录可校验官方状态。",style=MaterialTheme.typography.bodySmall,color=Muted)}}
+    item(key="retry",contentType="retry"){Column{if(ui.timeline.any{it.record.retryable&&it.record.status in RETRYABLE})OutlinedButton(onClick={vm.runNow()},enabled=ui.accounts.isNotEmpty()){Text("重试可安全重试的未完成项")};Text("只有明确可重试的失败项才会重试；待确认提交不重发，点击记录可校验官方状态。",style=MaterialTheme.typography.bodySmall,color=Muted)}}
 }
 
 private val RETRYABLE=listOf("failed","waiting_network")
@@ -598,11 +624,12 @@ private val RETRYABLE=listOf("failed","waiting_network")
     val errorColor=MaterialTheme.colorScheme.error
     QCard({onOpen(entry)}){
         Text("${entry.day} · ${safeLabel(accountNickname)}",style=MaterialTheme.typography.bodySmall,color=Muted,overflow=TextOverflow.Ellipsis,maxLines=1)
-        // OVERFLOW: the status chip is the short, fixed-vocabulary side; the game/role name is the long,
-        // user-controlled side, so the name takes `weight(1f)` and the chip keeps its intrinsic width.
-        // Before this, both were unweighted in a Row: a long present() label ("授权或角色检查未通过") plus a
-        // long target name measured wider than the card and the chip was clipped at the card edge.
-        Row(verticalAlignment=Alignment.CenterVertically){
+        // OVERFLOW: the status is the critical side, so it is NOT truncated -- it wraps to
+        // SUBLABEL_MAX_LINES lines inside a bounded width. The game/role name is the long, user-controlled
+        // side and takes `weight(1f)` with ellipsis, so it yields space to the status instead of the other
+        // way round. Before this, both were unweighted in a Row: a long present() label plus a long target
+        // name measured wider than the card and the chip was clipped at the card edge.
+        Row(verticalAlignment=Alignment.Top){
             Text(safeLabel(r.targetName),modifier=Modifier.weight(1f),style=MaterialTheme.typography.titleMedium,overflow=TextOverflow.Ellipsis,maxLines=2)
             Spacer(Modifier.width(8.dp))
             QResultRow(row,modifier=Modifier.widthIn(max=SUBLABEL_MAX))
@@ -669,38 +696,93 @@ private fun LazyListScope.SettingsPage(ui:PageUiState,s:UiState,policy:GlassPoli
 
 
 /**
- * Status word on a record card. Bounded in width so a long `present().label` can never eat the row:
- * the card gives this side at most [SUBLABEL_MAX] (128.dp, ~7 CJK glyphs at body size) and the game/role
- * name on the left takes `weight(1f)` with ellipsis. Touch target is not affected (this is a Text, not a
- * control) and the font size is not reduced -- only the label ellipsizes.
+ * Status word on a record card. The LABEL IS NEVER TRUNCATED: this is the one place that tells the user
+ * what actually happened, so an ellipsized "需要处理…" would hide the critical part of the message.
+ *
+ * It wraps to at most [SUBLABEL_MAX_LINES] lines instead (bounded so one verbose provider string cannot
+ * push the card's own details off screen); the game/role name on the left takes `weight(1f)` and ellipsizes
+ * first, so the status always wins the space it needs. A whole row tap opens the detail sheet, which
+ * repeats the full error, source, providerCode, httpStatus, verificationMethod, verifiedAt and executionId,
+ * so nothing is only reachable from this label.
+ *
+ * Font size is not reduced and the touch target is unaffected: this is a Text, not a control.
  */
-@Composable private fun QResultRow(row:RecordRow,modifier:Modifier=Modifier){Text(row.presentation.label,modifier=modifier,style=MaterialTheme.typography.labelLarge,color=when(row.presentation.group){"success"->MaterialTheme.colorScheme.primary;"attention","uncertain"->MaterialTheme.colorScheme.error;else->Muted},maxLines=1,overflow=TextOverflow.Ellipsis)}
+internal const val SUBLABEL_MAX_LINES=3
+
+/**
+ * Semantic status tone. The five names are the product vocabulary (greenSuccess / tealAlready /
+ * amberAccepted / grayUnknown / redFailed). Theme owns the actual palette, so this maps each presentation
+ * group onto an existing ColorScheme role instead of hard-coding hex values that would not follow the
+ * theme or its dark/dynamic variants.
+ *
+ * Pure and internal so the mapping is pinned by a JVM test: a group silently falling through to the muted
+ * colour is exactly how "需要处理" would stop looking urgent.
+ */
+internal enum class StatusTone { GreenSuccess, TealAlready, AmberAccepted, GrayUnknown, RedFailed }
+
+internal fun statusTone(group:String):StatusTone = when(group.trim().lowercase()) {
+    "success" -> StatusTone.GreenSuccess
+    "already","done","completed","renewed" -> StatusTone.TealAlready
+    "attention","actionable","submitted","accepted","auth_required" -> StatusTone.AmberAccepted
+    "uncertain","pending","unknown" -> StatusTone.GrayUnknown
+    "failed","failure","error" -> StatusTone.RedFailed
+    else -> StatusTone.GrayUnknown
+}
+
+@Composable private fun QResultRow(row:RecordRow,modifier:Modifier=Modifier) {
+    Text(text=row.presentation.label,modifier=modifier.testTag("record-status"),style=MaterialTheme.typography.labelLarge,
+        color=signStateColor(row.semanticStatus),maxLines=SUBLABEL_MAX_LINES,overflow=TextOverflow.Visible)
+}
+
+@Composable internal fun signStateColor(state:String):Color {
+    val colors=MaterialTheme.colorScheme
+    // Colour AND the word itself carry the meaning, so a colourblind user still reads the status.
+    val dark=colors.surface.luminance()<.5f
+    return when(statusTone(state)) {
+        StatusTone.GreenSuccess->if(dark)Color(0xFF8DDDB4) else Color(0xFF17613C)
+        StatusTone.TealAlready->if(dark)Color(0xFF83D4DC) else Color(0xFF00646E)
+        StatusTone.AmberAccepted->if(dark)Color(0xFFF1CF86) else Color(0xFF785000)
+        StatusTone.GrayUnknown->Muted
+        StatusTone.RedFailed->colors.error
+    }
+}
 
 internal val SUBLABEL_MAX=128.dp
+
+internal fun recordDiagnostics(r:CheckRecord):String = listOfNotNull(
+    r.httpStatus?.let { "HTTP：$it" },
+    r.providerCode.takeIf { it.isNotBlank() }?.let { "平台业务码：$it" },
+    "结果来源：${r.resultSource}",
+    r.verificationMethod.takeIf { it.isNotBlank() }?.let { "核验方式：$it" },
+    r.verifiedAt.takeIf { it.isNotBlank() }?.let { "官方确认时间：$it" },
+    "重复提交：${if(r.retryable)"仅在明确允许的失败条件下重试" else "已限制；请先核对官方状态"}",
+    r.executionId.takeIf { it.isNotBlank() }?.let { "执行编号：$it" },
+).joinToString("\n")
 
 // Page content inset, shared by the LazyColumn contentPadding and by rows that must bleed past it.
 private val PAGE_INSET=20.dp
 
 /**
- * Pull a horizontal scroll row out by [inset] on each side so its SCROLLABLE viewport spans the full screen
- * width; the row re-adds the same inset as its own content padding, so the first and last chip still align
- * with the cards at rest.
+ * Pull a horizontal row out by [inset] on each side so its viewport spans the full screen width; the row
+ * re-adds the same inset as its own `contentPadding`, so the first and last child still align with the
+ * cards at rest while the scrollable area reaches both screen edges.
  *
- * Why not `Modifier.padding(-20.dp)`: padding() coerces negative values to zero, so the row would stay
- * trapped inside the LazyColumn's 20.dp inset and the trailing chips would stay unreachable at the end of
- * the scroll (the reported clipping). Why not `Modifier.offset()`: offset keeps the original (too narrow)
- * width and just shifts the node, so the leading chip would get clipped instead.
+ * The previous version was mathematically wrong: it MEASURED with `maxWidth - 2*inset` and then reported
+ * `placeable.width + 2*inset`, so the reported width equalled the original constraint and the row never
+ * reached past the LazyColumn's inset at all -- only its content padding grew. Fixed here by measuring
+ * with the full constraint, reporting `width + 2*inset`, and placing at `-inset` so the extra space is
+ * genuinely outside the page inset on both sides.
  *
- * Implementation uses `layout {}` on public Compose layout APIs only (LayoutModifierScope + Dp.roundToPx).
+ * Why not `Modifier.padding(-20.dp)`: padding() coerces negatives to zero. Why not `Modifier.offset()`:
+ * offset shifts the node but keeps its narrow width, so it clips at one end instead of bleeding at both.
  */
 private fun Modifier.bleed(inset:Dp):Modifier = this.layout { measurable, constraints ->
     val px=inset.roundToPx()
-    val extra=px*2
-    val placeable=measurable.measure(constraints.copy(
-        minWidth=(constraints.minWidth-extra).coerceAtLeast(0),
-        maxWidth=(constraints.maxWidth-extra).coerceAtLeast(0),
-    ))
-    layout(placeable.width+extra,placeable.height){placeable.place(px,0)}
+    // Measure at the FULL constraint: the child keeps the width it would have had inside the inset, and
+    // the extra bleed is added around it, so the viewport grows instead of the content shrinking.
+    val placeable=measurable.measure(if(constraints.hasBoundedWidth) constraints.copy(minWidth=0) else constraints)
+    val w=placeable.width+px*2
+    layout(w,placeable.height){placeable.place(px,0)}
 }
 
 internal fun qTime(value:String?):String=if(value.isNullOrBlank())"尚无记录" else runCatching{OffsetDateTime.parse(value).atZoneSameInstant(SignRepository.TZ).format(DateTimeFormatter.ofPattern("MM-dd HH:mm:ss"))}.getOrDefault(value.take(19))
