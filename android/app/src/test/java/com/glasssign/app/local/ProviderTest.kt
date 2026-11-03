@@ -35,7 +35,7 @@ class ProviderTest {
     }
     @Test fun miyousheDoesNotClaimSuccessWithoutFinalConfirmation() {
         val h=Fake{if(it.url.endsWith("/sign"))JSONObject("""{"retcode":0}""") else JSONObject("""{"retcode":0,"data":{"is_sign":false}}""")}
-        assertEquals("needs_action",MiyousheAdapter(h).checkin(JSONObject("""{"cookie":"fixture-cookie"}"""),SignTarget("genshin|1|cn_gf01","test")){}.status)
+        assertEquals("accepted",MiyousheAdapter(h).checkin(JSONObject("""{"cookie":"fixture-cookie"}"""),SignTarget("genshin|1|cn_gf01","test")){}.status)
     }
     @Test fun miyousheCaptchaStopsBeforeSign() {
         val h=Fake{JSONObject("""{"retcode":1034}""")}
@@ -43,7 +43,7 @@ class ProviderTest {
         assertEquals(1,h.calls.size)
     }
     @Test fun sklandAllGamesAndOverloadedAlreadyCode() {
-        val h=Fake { if(it.url.endsWith("/binding"))fixture("skland_binding_multi.json") else fixture("skland_already.json") }
+        val h=Fake { if(it.url.endsWith("/auth/refresh"))JSONObject("""{"code":0,"data":{"token":"fixture-s"}}""") else if(it.url.endsWith("/binding"))fixture("skland_binding_multi.json") else fixture("skland_already.json") }
         val a=SklandAdapter(h);val c=JSONObject("""{"cred":"fixture-c","signToken":"fixture-s","dId":"fixture-d"}""")
         val ts=a.targets(c){};assertEquals(5,ts.size);assertTrue(ts.any{it.id=="endfield|30000002|40000002"})
         assertEquals("already",a.checkin(c,SignTarget("island|3","test")){}.status)
@@ -58,10 +58,93 @@ class ProviderTest {
         val context="""{"platform":"3","timestamp":"$time","dId":"fixture-d","vName":"1.0.0"}"""
         assertEquals(Signing.skland("/api/v1/game/endfield/attendance","",time,context,"fixture-s"),call.headers["sign"])
     }
+    @Test fun sklandBindingSignsSlashDeviceIdLikeTheWebSdk() {
+        val http=Fake { if(it.url.endsWith("/auth/refresh"))JSONObject("""{"code":0,"data":{"token":"sign-token"}}""") else fixture("skland_binding_multi.json") }
+        val credentials=JSONObject().put("cred","fixture-c").put("signToken","sign-token").put("dId","device/a+b==")
+        SklandAdapter(http).targets(credentials){}
+        val call=http.calls.single{it.url.endsWith("/binding")}
+        val time=call.headers.getValue("timestamp")
+        val context="""{"platform":"1","timestamp":"$time","dId":"device/a+b==","vName":"1.5.1"}"""
+        assertEquals(Signing.skland("/api/v1/game/player/binding","",time,context,"sign-token"),call.headers["sign"])
+        assertEquals("device/a+b==",call.headers["dId"])
+    }
+    @Test fun sklandRenewsAndMigratesBeforeRoleLookupAndPersistsOnLaterFailure() {
+        val c=JSONObject().put("cred","fixture-c").put("signToken","expired").put("dId","""{"id":"device/a+b==","timestamp":1}""")
+        var saved:JSONObject?=null
+        val http=Fake {call->if(call.url.endsWith("/auth/refresh")) {
+            assertEquals("GET",call.method)
+            assertEquals("device/a+b==",call.headers["dId"])
+            JSONObject("""{"code":0,"data":{"token":"renewed"}}""")
+        }else {assertEquals("renewed",saved?.getString("signToken"));throw SignError("network","fixture offline")}}
+        try {SklandAdapter(http).targets(c){saved=JSONObject(c.toString())};fail()}catch(e:SignError){assertEquals("network",e.kind)}
+        assertEquals("device/a+b==",saved?.getString("dId"))
+        assertEquals(2,http.calls.size)
+        assertTrue(http.calls.all{it.method=="GET"})
+    }
+    @Test fun sklandRejectedOrMalformedRefreshNeverReachesBinding() {
+        for(reply in listOf("""{"code":10003}""","""{"code":0,"data":{}}""")) {
+            val http=Fake{JSONObject(reply)}
+            val c=JSONObject("""{"cred":"c","signToken":"old","dId":"d"}""")
+            var saved=false
+            try {SklandAdapter(http).targets(c){saved=true};fail()}catch(_:SignError){}
+            assertFalse(saved);assertEquals(1,http.calls.size)
+            assertTrue(http.calls.single().url.endsWith("/auth/refresh"))
+        }
+    }
+    @Test fun sklandReadonlyCalendarConfirmsAlreadyAndSkipsSubmission() {
+        val now=java.time.Instant.now().epochSecond.toString()
+        val http=Fake{call->when {
+            call.url.endsWith("/auth/refresh")->JSONObject("""{"code":0,"data":{"token":"fresh"}}""")
+            else->{assertEquals("GET",call.method);assertEquals(mapOf("gameId" to "1","uid" to "100"),call.query)
+                val time=call.headers.getValue("timestamp")
+                assertEquals(Signing.skland("/api/v1/game/attendance","gameId=1&uid=100",time,
+                    Signing.sklandContext("1",time,"device/a+b==","1.5.1"),"fresh"),call.headers["sign"])
+                JSONObject("""{"code":0,"data":{"currentTs":"$now","records":[{"ts":"$now"}]}}""")}
+        }}
+        val credential=JSONObject("""{"cred":"fixture","signToken":"old","dId":"device/a+b=="}""")
+        val adapter=SklandAdapter(http)
+        assertEquals("already",adapter.queryStatus(credential,SignTarget("arknights|100|1","fixture")){}.status)
+        assertEquals("already",adapter.checkin(credential,SignTarget("arknights|100|1","fixture")){}.status)
+        assertTrue(http.calls.all{it.method=="GET"})
+    }
+    @Test fun sklandMissingOrMalformedCalendarCannotAuthorizeSubmission() {
+        val now=java.time.Instant.now().epochSecond.toString()
+        for(data in listOf("{}","""{"currentTs":"$now"}""","""{"currentTs":"$now","records":[{}]}""")) {
+            val http=Fake{if(it.url.endsWith("/auth/refresh"))JSONObject("""{"code":0,"data":{"token":"fresh"}}""") else JSONObject("{\"code\":0,\"data\":$data}")}
+            val credential=JSONObject("""{"cred":"fixture","signToken":"old","dId":"d"}""")
+            assertEquals("uncertain",SklandAdapter(http).checkin(credential,SignTarget("arknights|100|1","fixture")){}.status)
+            assertTrue(http.calls.all{it.method=="GET"})
+        }
+    }
+    @Test fun sklandConfirmedEmptyCalendarAllowsOnlyOneNewSubmission() {
+        val now=java.time.Instant.now().epochSecond.toString()
+        var submitted=false
+        val http=Fake{when {
+            it.url.endsWith("/auth/refresh")->JSONObject("""{"code":0,"data":{"token":"fresh"}}""")
+            it.method=="GET"->JSONObject("""{"code":0,"data":{"currentTs":"$now","records":${if(submitted)"[{\"ts\":\"$now\"}]" else "[]"}}}""")
+            else->{submitted=true;JSONObject("""{"code":0}""")}
+        }}
+        val credential=JSONObject("""{"cred":"fixture","signToken":"old","dId":"d"}""")
+        assertEquals("success",SklandAdapter(http).checkin(credential,SignTarget("arknights|100|1","fixture")){}.status)
+        assertEquals(1,http.calls.count{it.method=="POST"})
+    }
+    @Test fun sklandUnconfirmedPostStaysProtectedWithoutResubmission() {
+        val now=java.time.Instant.now().epochSecond.toString()
+        val http=Fake{when {
+            it.url.endsWith("/auth/refresh")->JSONObject("""{"code":0,"data":{"token":"fresh"}}""")
+            it.method=="GET"->JSONObject("""{"code":0,"data":{"currentTs":"$now","records":[]}}""")
+            else->JSONObject("""{"code":0}""")
+        }}
+        val credential=JSONObject("""{"cred":"fixture","signToken":"old","dId":"d"}""")
+        assertEquals("accepted",SklandAdapter(http).checkin(credential,SignTarget("arknights|100|1","fixture")){}.status)
+        assertEquals(1,http.calls.count{it.method=="POST"})
+    }
     @Test fun taggedRefreshAndAlreadyAvoidsPost() {
-        val h=Fake {when {it.url.endsWith("refreshToken")->JSONObject("""{"code":0,"data":{"accessToken":"fixture-a","refreshToken":"fixture-rotated","uid":"9"}}""");it.url.endsWith("getGameRoles")->fixture("tagged_roles.json");it.url.endsWith("signin/state")->fixture("tagged_state_signed.json");else->error("Unexpected request")}}
+        // v0.7.7 P0: `todaySign` only proves a ROLE when the account owns exactly one role for the game, so the
+        // fixture now declares a single authorized role. A multi-role account keeps the permission to submit.
+        val h=Fake {when {it.url.endsWith("refreshToken")->JSONObject("""{"code":0,"data":{"accessToken":"fixture-a","refreshToken":"fixture-rotated","uid":"9"}}""");it.url.endsWith("getGameRoles")->JSONObject("""{"code":0,"data":{"roles":[{"roleId":"50000001"}]}}""");it.url.endsWith("signin/state")->fixture("tagged_state_signed.json");else->error("Unexpected request")}}
         val c=JSONObject("""{"refreshToken":"fixture-old","deviceId":"fixture-d","communityCheckin":false}""");val a=TaggedAdapter(h);var saved=false
-        val ts=a.targets(c){saved=true};assertTrue(saved);assertEquals("fixture-rotated",c.getString("refreshToken"));assertEquals(2,ts.size)
+        val ts=a.targets(c){saved=true};assertTrue(saved);assertEquals("fixture-rotated",c.getString("refreshToken"));assertEquals(1,ts.size)
         assertEquals("already",a.checkin(c,ts[0]){}.status);assertFalse(h.calls.any{it.url.endsWith("/awapi/sign")})
     }
     @Test fun taggedRotationSurvivesFollowingNetworkFailure() {

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "github": {
+    "owner": "Starlevin",
+    "repo": "Hoshiori",
+    "releaseUrl": "https://github.com/Starlevin/Hoshiori/releases/latest"
+  },
+  "quark": {
+    "url": "https://pan.quark.cn/s/739482783865",
+    "note": "夸克网盘公开永久目录，无需提取码；GitHub 无法访问时可直接在此手动取回正式版 APK。"
+  }
+}

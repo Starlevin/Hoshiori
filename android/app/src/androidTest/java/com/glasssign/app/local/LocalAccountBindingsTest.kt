@@ -122,7 +122,7 @@ class LocalAccountBindingsTest {
                 db.version=1
             }
             SignRepository(context,legacyName).use { upgraded ->
-                assertEquals(4,upgraded.readableDatabase.version);assertEquals(id,upgraded.accounts().single().id)
+                assertEquals(5,upgraded.readableDatabase.version);assertEquals(id,upgraded.accounts().single().id)
                 assertEquals("needs_action",upgraded.accounts().single().authState);assertFalse(upgraded.accounts().single().enabled)
                 assertEquals("success",upgraded.records("2026-10-31").single().status)
                 assertTrue(upgraded.pendingBindings().isEmpty());assertTrue(upgraded.retiredCredentials().isEmpty())

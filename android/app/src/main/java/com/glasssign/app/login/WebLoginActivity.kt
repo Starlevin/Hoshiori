@@ -105,6 +105,17 @@ class WebLoginActivity : ComponentActivity() {
     private var poll: Job? = null
     private var closed = false
 
+    /**
+     * Incremented whenever the web session is replaced (device switch, agent switch, cookie reset).
+     * A harvest started under an older generation may finish later; its result must never be
+     * delivered as the session of the new generation.
+     */
+    private var sessionGeneration = 0
+
+    /** Skland only: a session is handed over after two consecutive identical reads. */
+    private var continuity = SessionHarvest.SklandContinuity()
+
+    private var sessionReady by mutableStateOf(false)
     private var status by mutableStateOf("正在打开官方登录页…")
     private var progress by mutableStateOf(0.08f)
     private var blocked by mutableStateOf<String?>(null)
@@ -116,7 +127,7 @@ class WebLoginActivity : ComponentActivity() {
         // The official page may show the user's own password / SMS code: keep it out of screenshots,
         // the recent-tasks thumbnail and any screen recorder. Debug builds stay capturable so the
         // login page can be reviewed; shipped builds are always protected.
-        if (!com.glasssign.app.BuildConfig.DEBUG) {
+        if (true) {
             window.setFlags(
                 android.view.WindowManager.LayoutParams.FLAG_SECURE,
                 android.view.WindowManager.LayoutParams.FLAG_SECURE,
@@ -130,7 +141,39 @@ class WebLoginActivity : ComponentActivity() {
         setContent {
             GlassSignTheme(reduceMotion = true) { Screen() }
         }
+        android.webkit.WebStorage.getInstance().deleteAllData()
+        CookieManager.getInstance().removeAllCookies {
+            CookieManager.getInstance().flush();sessionReady=true
+        }
         startPolling()
+    }
+
+    /**
+     * Drops the current web session and starts a fresh one: an in-flight harvest is cancelled and
+     * invalidated, the continuity sample is cleared, and polling only restarts after the cookies and
+     * web storage of the previous account are actually gone. The already bound accounts are untouched.
+     */
+    private fun resetWebSession(reload: Boolean, message: String) {
+        sessionGeneration++
+        val generation=sessionGeneration
+        poll?.cancel(); poll = null
+        continuity.reset()
+        sessionReady=false
+        harvesting = false
+        blocked = null
+        popup?.let { window -> runCatching { popupHost?.removeView(window); window.destroy() } }
+        popup = null
+        web?.stopLoading()
+        android.webkit.WebStorage.getInstance().deleteAllData()
+        CookieManager.getInstance().removeAllCookies {
+            if(closed || generation!=sessionGeneration || isDestroyed)return@removeAllCookies
+            CookieManager.getInstance().flush()
+            sessionReady=true
+            status = message
+            progress = 0.08f
+            if (reload) web?.let { view -> runCatching { view.loadUrl(platform.startUrl) } }
+            startPolling()
+        }
     }
 
     @Composable
@@ -143,6 +186,9 @@ class WebLoginActivity : ComponentActivity() {
                             Text("登录${platform.title}", color = White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                             Text(status, color = if (blocked != null) Rose else Muted, fontSize = 10.sp, lineHeight = 14.sp)
                         }
+                        TextButton(onClick={
+                            resetWebSession(reload = true, message = "已清除本次网页会话，请登录其他账号；已绑定授权保留")
+                        }) {Text("切换账号",fontSize=11.sp)}
                         if (harvesting) {
                             CircularProgressIndicator(Modifier.size(16.dp), color = Cyan, strokeWidth = 2.dp)
                             Spacer(Modifier.width(8.dp))
@@ -166,7 +212,7 @@ class WebLoginActivity : ComponentActivity() {
                     )
                 }
                 Box(Modifier.weight(1f)) {
-                    AndroidView(
+                    if(sessionReady)AndroidView(
                         modifier = Modifier.fillMaxSize(),
                         factory = { context ->
                             android.widget.FrameLayout(context).apply {
@@ -238,12 +284,19 @@ class WebLoginActivity : ComponentActivity() {
 
     /** Sites that answer a phone UA with an "install the app" page need this switch. */
     private fun switchAgent() {
+        if(!sessionReady)return
+        poll?.cancel();poll=null
         agent = LoginPlatforms.other(agent)
+        // A user-agent change navigates away from the page that produced the current sample, so any
+        // session read under the previous generation is no longer trustworthy.
+        sessionGeneration++
+        continuity.reset()
         status = if (agent == UserAgent.DESKTOP) "已切换到桌面版页面，正在重新加载…" else "已切换到手机版页面，正在重新加载…"
         web?.let { view ->
             applyAgent(view, agent)
             view.reload()
         }
+        startPolling()
     }
 
     private val defaultUserAgent: String by lazy { WebSettings.getDefaultUserAgent(this) }
@@ -270,6 +323,7 @@ class WebLoginActivity : ComponentActivity() {
         }
 
         override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+            continuity.reset()
             status = "官方页面加载中 · ${LoginPlatforms.redact(url)}"
             progress = 0.35f
         }
@@ -282,7 +336,7 @@ class WebLoginActivity : ComponentActivity() {
             if (agent == UserAgent.DESKTOP && LoginPlatforms.allows(platform, url)) forceDesktopWidth(view)
             if (blocked == null) {
                 status = if (agent == UserAgent.DESKTOP) {
-                    "请在官方页面登录；看不到登录按钮时左右滑动或双指缩小页面"
+                    "页面已自动适配宽度；请完成登录，也可切换手机版或取消后使用本人授权导入"
                 } else {
                     "请在官方页面完成登录；完成后会自动继续"
                 }
@@ -336,30 +390,45 @@ class WebLoginActivity : ComponentActivity() {
         poll = lifecycleScope.launch {
             val started = System.currentTimeMillis()
             var rounds = 0
+            val generation = sessionGeneration
             while (isActive && !closed) {
                 delay(POLL_MS)
                 rounds++
+                // A switch of account or user agent bumped the generation: this loop is stale and must
+                // not deliver a session read from the previous page.
+                if (generation != sessionGeneration) return@launch
                 if (System.currentTimeMillis() - started > TIMEOUT_MS) {
-                    fail("官方授权未返回，尚未完成绑定。请返回游戏绑定页重试。")
+                    if (generation == sessionGeneration) fail("官方授权未返回，尚未完成绑定。请返回游戏绑定页重试。")
                     return@launch
                 }
+                var sample: SessionHarvest.SklandSession? = null
                 val result = try {
-                    kotlinx.coroutines.withTimeoutOrNull(5_000L) { harvest() }
+                    kotlinx.coroutines.withTimeoutOrNull(5_000L) { harvest { sample = it } }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (_: Exception) {
-                    fail("官方授权返回异常，尚未完成绑定，请返回重试")
+                    if (generation == sessionGeneration) fail("官方授权返回异常，尚未完成绑定，请返回重试")
                     return@launch
                 }
+                if (generation != sessionGeneration || closed) return@launch
                 when (result) {
                     is HarvestResult.Ready -> {
+                        // Skland signs with cred + token + device id; hand it over only after the same
+                        // triple has been observed twice in a row, so a mid-rewrite sample is not used.
+                        if (platform.id == "skland" && continuity.accept(sample) == null) {
+                            status = "正在确认森空岛官方登录环境…（可随时取消）"
+                            continue
+                        }
                         harvesting = true
                         succeed(result.credentials)
                         return@launch
                     }
-                    is HarvestResult.Incomplete -> if (blocked == null) {
-                        val remaining = (TIMEOUT_MS - (System.currentTimeMillis() - started)) / 1000
-                        status = "${result.missing}（剩余 ${remaining.coerceAtLeast(0)} 秒，可随时取消）"
+                    is HarvestResult.Incomplete -> {
+                        if(platform.id=="skland")continuity.reset()
+                        if (blocked == null) {
+                            val remaining = (TIMEOUT_MS - (System.currentTimeMillis() - started)) / 1000
+                            status = "${result.missing}（剩余 ${remaining.coerceAtLeast(0)} 秒，可随时取消）"
+                        }
                     }
                     null -> {
                         fail("官方页面未响应，尚未完成绑定。请检查网络后重新打开登录页")
@@ -370,24 +439,33 @@ class WebLoginActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun harvest(): HarvestResult {
+    /**
+     * Reads the session and, for Skland, the continuity sample from the *same* storage snapshot so
+     * the pair check cannot mix a sample taken from one page state with a credential from another.
+     * A read that is abandoned by the caller's timeout does not record a sample.
+     */
+    private suspend fun harvest(record: (SessionHarvest.SklandSession?) -> Unit = {}): HarvestResult {
         val jar = CookieJar.parse(
             CookieManager.getInstance().getCookie(platform.cookieProbe),
             platform.cookieNames,
         )
         val storage = if (platform.storageKeys.isEmpty()) emptyMap() else readStorage()
-        return SessionHarvest.build(platform.id, jar, storage, deviceId)
+        // Built from the same snapshot the sample is taken from, so the pair check cannot mix states.
+        val result = SessionHarvest.build(platform.id, jar, storage, deviceId)
+        record(if (platform.id == "skland") SessionHarvest.sklandSession(storage) else null)
+        return result
     }
 
     private suspend fun readStorage(): Map<String, String> = withContext(Dispatchers.Main) {
         val view = web ?: return@withContext emptyMap()
         if (view.url.isNullOrBlank()) return@withContext emptyMap()
+        val page=view.url
         val keys = platform.storageKeys.joinToString(",") { JSONObject.quote(it) }
         val script = "(function(){try{var k=[$keys],o={};" +
             "for(var i=0;i<k.length;i++){var v=window.localStorage.getItem(k[i]);if(v!==null){o[k[i]]=v;}}" +
             "return JSON.stringify(o);}catch(e){return '{}';}})()"
         val raw = suspendCancellableCoroutine<String?> { continuation ->
-            view.evaluateJavascript(script) { value -> if (continuation.isActive) continuation.resume(value) }
+            view.evaluateJavascript(script) { value -> if (continuation.isActive) continuation.resume(if(view.url==page)value else null) }
         }
         val json = (runCatching { JSONTokener(raw).nextValue() }.getOrNull() as? String).orEmpty()
         if (json.isBlank()) return@withContext emptyMap()
@@ -424,8 +502,10 @@ class WebLoginActivity : ComponentActivity() {
 
     /** Leaving the login screen must not leave a usable session behind for the next attempt. */
     private fun teardown() {
+        sessionGeneration++
         poll?.cancel()
         poll = null
+        continuity.reset()
         popup?.let { runCatching { it.destroy() } }
         popup = null
         web?.let { view ->

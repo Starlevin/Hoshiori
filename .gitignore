@@ -30,3 +30,17 @@
 **/*.key
 **/*.p12
 **/__pycache__/
+
+!/docs/v070-report.md
+!/docs/v070-audit-and-plan.md
+!/docs/v072-report.md
+!/docs/v073-report.md
+!/docs/v074-report.md
+!/docs/v075-report.md
+!/docs/brand-v076.md
+!/docs/glass-research-v076.md
+!/docs/v076-report.md
+!/docs/RELEASE_PROCESS.md
+!/docs/v077-audit.md
+!/docs/v077-report.md
+!/docs/v078-report.md
