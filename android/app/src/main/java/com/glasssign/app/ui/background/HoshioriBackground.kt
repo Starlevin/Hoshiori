@@ -20,6 +20,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -157,7 +158,11 @@ val LocalBackgroundEnabled = staticCompositionLocalOf { false }
 internal fun pageGradientBrush(): Brush {
     val colors = MaterialTheme.colorScheme
     return remember(colors.primaryContainer, colors.background, colors.secondaryContainer) {
-        Brush.linearGradient(
+        // True OLED: a pure-black background means a flat black page, not a tinted
+        // gradient. The scheme already makes the containers black in that case, so
+        // this is a belt-and-braces flatten, not a second source of truth.
+        if (colors.background == Color.Black) Brush.linearGradient(listOf(Color.Black, Color.Black))
+        else Brush.linearGradient(
             listOf(colors.primaryContainer.copy(alpha = .38f), colors.background, colors.secondaryContainer.copy(alpha = .18f))
         )
     }
