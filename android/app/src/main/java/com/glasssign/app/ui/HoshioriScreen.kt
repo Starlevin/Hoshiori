@@ -330,7 +330,7 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
         // the dock's position. Recording still happens in a DRAW modifier (recording in a layout lambda
         // throws "layer is not in a draw pass"); nothing here records from a measure/layout pass.
         Box(Modifier.fillMaxSize().backdropSource(backdrop)) {
-            Box(Modifier.fillMaxSize().background(PageGradient(colors.primaryContainer,colors.background,colors.secondaryContainer)))
+            com.glasssign.app.ui.background.HoshioriBackground(Modifier.fillMaxSize())
             key(scope.tab,scope.detail) {
                 LazyColumn(
                     state=listState,
@@ -617,16 +617,18 @@ private fun LazyListScope.SettingsPage(ui:PageUiState,s:UiState,policy:GlassPoli
     item(key="automatic",contentType="automatic"){QCard{Text("自动签到",style=MaterialTheme.typography.titleLarge);QSwitch("每日自动签到","手机本地执行；系统可能延迟",ui.scheduleEnabled){enabled->onSchedule(enabled);onOpenPlan()};TextButton(onClick=onOpenPlan){Text("每日运行偏好 · ${ui.dailyTime}")};Text("本次开始：${if(s.jobRunning)qTime(s.overview?.lastStartedAt) else "当前未执行"}",color=Muted);Text("最近实际执行：${qTime(s.overview?.lastFinishedAt)}",color=Muted);Text("下次预计：${qNext(s)}",color=Muted);TextButton(onClick={onTab(1)}){Text("按账号 / 游戏管理")}}}
     item(key="diagnostics",contentType="diagnostics"){QDiagnostics(s,policy,onRefresh,onSettings)}
     item(key="appearance",contentType="appearance"){QCard{Text("外观",style=MaterialTheme.typography.titleLarge);TextButton(onClick=onOpenAppearance,modifier=Modifier.testTag("appearance")){Text("主题与液态玻璃")};QSwitch("减少动效","关闭弹性过渡，同时尊重系统动画设置",s.reduceMotion){onReduceMotion(it)};Text("当前材质：${policy.reason}",style=MaterialTheme.typography.bodySmall,color=Muted)}}
+    item(key="updates",contentType="updates"){com.glasssign.app.ui.update.HoshioriUpdateCard()}
     item(key="plugins",contentType="plugins"){QCard{Text("插件",style=MaterialTheme.typography.titleLarge);Text("按需下载扩展，核心游戏签到无需安装插件。",style=MaterialTheme.typography.bodyMedium,color=Muted);TextButton(onClick={onSettings("plugins")},modifier=Modifier.testTag("plugin-manager")){Text("插件管理")}}}
     item(key="privacy",contentType="privacy"){QCard{Text("数据与隐私",style=MaterialTheme.typography.titleLarge);Text("授权通过本机 Keystore 加密。密码、验证码不保存；不需要云服务器。",color=Muted);Text("升级自动迁移本机数据，失败保留原数据与私有检查点。暂不支持跨设备授权备份；卸载或清数据会丢失本机密钥。",style=MaterialTheme.typography.bodySmall,color=Muted);TextButton(onClick={onTab(1)}){Text("授权管理与历史清理")}}}
     item(key="about",contentType="about"){Text("星栞 Hoshiori ${BuildConfig.VERSION_NAME}\n本机执行 · 无自建服务器\n第三方实号及长期后台表现以实际验收为准",style=MaterialTheme.typography.bodySmall,color=Muted)}
+    item(key="brand",contentType="brand"){HoshioriBrandCard()}
 }
 
 // ---------------------------------------------------------------------------------------------
 // Shared pieces (signatures preserved for other screens/tests)
 // ---------------------------------------------------------------------------------------------
 
-@Composable internal fun QCard(onClick:(()->Unit)?=null,content:@Composable ColumnScope.()->Unit) {val c=MaterialTheme.colorScheme;Surface(Modifier.fillMaxWidth().then(if(onClick!=null)Modifier.clickable(onClick=onClick) else Modifier),shape=RoundedCornerShape(24.dp),color=c.surface.copy(alpha=.94f),contentColor=c.onSurface,border=BorderStroke(1.dp,c.outlineVariant.copy(alpha=.5f))){Column(Modifier.padding(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp),content=content)}}
+@Composable internal fun QCard(onClick:(()->Unit)?=null,content:@Composable ColumnScope.()->Unit) {val c=MaterialTheme.colorScheme;val cardAlpha=if(com.glasssign.app.ui.background.LocalBackgroundEnabled.current).78f else .94f;Surface(Modifier.fillMaxWidth().then(if(onClick!=null)Modifier.clickable(onClick=onClick) else Modifier),shape=RoundedCornerShape(24.dp),color=c.surface.copy(alpha=cardAlpha),contentColor=c.onSurface,border=BorderStroke(1.dp,c.outlineVariant.copy(alpha=.5f))){Column(Modifier.padding(20.dp),verticalArrangement=Arrangement.spacedBy(12.dp),content=content)}}
 @Composable internal fun QSwitch(title:String,description:String,checked:Boolean,onChange:(Boolean)->Unit){Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)){Column(Modifier.weight(1f)){Text(title,style=MaterialTheme.typography.titleSmall);Text(description,style=MaterialTheme.typography.bodySmall,color=Muted)};Switch(checked,onChange)}}
 
 /**
@@ -642,15 +644,22 @@ private fun LazyListScope.SettingsPage(ui:PageUiState,s:UiState,policy:GlassPoli
  */
 @Composable private fun QAccount(a:Account,bindings:List<GameBinding>,onClick:((String)->Unit)?) {
     val meta=providerMeta(a.provider)
-    val providerTitle=meta.title
     val valid=a.authState=="valid"
     val summary=remember(a,bindings){accountScopeSummary(a,bindings)}
     val games=remember(summary){summary.gamesLine()}
+    // Identity model (data/AccountDisplay.kt): the platform's readable name+tag is the default title, the user's
+    // remark is its own line, the masked platform UID is a supplement, and roles are summarised. A role display
+    // name is only used as a title when the platform wrote it as a platform card ("清寒#7810").
+    val identity=remember(a,bindings){accountDisplay(a.provider,a.nickname,a.providerUserId,bindings.map{it.name})}
     QCard(if(onClick==null)null else {{onClick(a.id)}}) {
         // OVERFLOW at 200% font scale: the title/nickname column takes weight(1f) with ellipsis, and the
         // status word is capped so 2x font cannot squeeze the title down to a single glyph before wrapping.
-        Row(verticalAlignment=Alignment.CenterVertically){ProviderBadge(meta);Spacer(Modifier.width(12.dp));Column(Modifier.weight(1f)){Text(providerTitle,style=MaterialTheme.typography.titleMedium,overflow=TextOverflow.Ellipsis,maxLines=1);Text(safeLabel(a.nickname),color=Muted,overflow=TextOverflow.Ellipsis,maxLines=1)};Text(if(!a.enabled)"已暂停" else if(valid)"授权可用" else "需要处理",modifier=Modifier.widthIn(max=SUBLABEL_MAX),style=MaterialTheme.typography.labelLarge,color=if(valid)MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,maxLines=2,overflow=TextOverflow.Ellipsis)}
-        Text(if(a.providerUserId.isBlank())"平台未提供社区账号 ID · 按备注与角色核对" else "账号 ${maskedIdentity(a.providerUserId)}",style=MaterialTheme.typography.bodySmall,color=Muted,overflow=TextOverflow.Ellipsis,maxLines=2)
+        Row(verticalAlignment=Alignment.CenterVertically){ProviderBadge(meta);Spacer(Modifier.width(12.dp));Column(Modifier.weight(1f)){Text(safeLabel(identity.title),style=MaterialTheme.typography.titleMedium,overflow=TextOverflow.Ellipsis,maxLines=1);identity.customNote?.let{Text("备注 · ${safeLabel(it)}",color=Muted,overflow=TextOverflow.Ellipsis,maxLines=1)}};Text(if(!a.enabled)"已暂停" else if(valid)"授权可用" else "需要处理",modifier=Modifier.widthIn(max=SUBLABEL_MAX),style=MaterialTheme.typography.labelLarge,color=if(valid)MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,maxLines=2,overflow=TextOverflow.Ellipsis)}
+        identity.platformLine?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=Muted,overflow=TextOverflow.Ellipsis,maxLines=2)}
+        // 角色行: 读到角色后，标题之外还有角色才显示汇总；一条角色都没读到时才显示占位符，
+        // 因此"标题里已经是那条角色"不会再被同时写成"角色待同步"。
+        if(identity.hasRoleData) identity.rolesLine?.let{Text(safeLabel(it),style=MaterialTheme.typography.bodySmall,color=Muted,overflow=TextOverflow.Ellipsis,maxLines=2)}
+        else Text(PENDING_ROLES,style=MaterialTheme.typography.bodySmall,color=Muted,overflow=TextOverflow.Ellipsis,maxLines=2)
         Text(games,overflow=TextOverflow.Ellipsis,maxLines=2)
         Text(summary.line,style=MaterialTheme.typography.bodySmall,color=Muted)
         Text(if(a.autoSignEnabled)"参加自动计划" else "仅手动 · 不参加自动计划",style=MaterialTheme.typography.bodySmall,color=Muted)

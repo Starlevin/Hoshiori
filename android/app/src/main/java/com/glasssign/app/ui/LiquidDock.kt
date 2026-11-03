@@ -15,15 +15,11 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
 import androidx.compose.foundation.gestures.horizontalDrag
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,7 +30,9 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -45,6 +43,7 @@ import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -101,6 +100,74 @@ object GlassTokens {
     val corner=34.dp;val margin=18.dp;val blur=18.dp;val lift=12.dp;val maxWidth=520.dp
     val lensInset=6.dp;val lensGap=3.dp
 }
+
+/**
+ * Optical magnitudes for the dock material. The pipeline is adapted from the Apache-2.0 upstream `backdrop`
+ * (see [OpticalPass]); the magnitudes below are tuned to the reference capture, not copied from upstream's
+ * catalog demo, and every one of them is a dp value resolved to px at draw time so the look is density
+ * independent. Reference behaviour being matched: a thick lens whose bend is concentrated in a narrow rim
+ * (a calm middle), a visible sub-pixel rim rainbow, and a rim light that reads as surface rather than paint.
+ */
+internal object GlassOptics {
+    /** Depth of the refracting bevel as a fraction of lens height. Keep it small: the bend must be a rim. */
+    const val BaseBandRatio=.16f
+    /** Hard cap on the bevel, so a tall bar can never bend its whole interior. */
+    val BaseBandMax=9.dp
+    /** Cap while dragging, so the stretched capsule still shows a flat middle. */
+    val DragBandMax=6.dp
+    /** Floor, so the bevel never collapses below one pixel at small sizes. */
+    val BandMin=3.dp
+    /** Peak displacement of the bar: a thick lens, still a fraction of its own bevel x 3. */
+    const val BaseBendRatio=2.4f
+    /** Peak signed displacement of the travelling capsule: negative bends the rim outwards (raised lens). */
+    const val LensBendRatio=2.0f
+    /** Dispersion on the travelling lens: the reference's rainbow rim is clearly visible while it moves. */
+    const val LensDispersion=.9f
+    /** Faint dispersion on the bar so its static rim also separates colours, below the capsule's. */
+    const val BarDispersion=.35f
+    /** Upstream highlight defaults (45 deg, falloff 1). */
+    const val EdgeLightAngleDegrees=45f
+    const val EdgeLightFalloff=1f
+    const val LitAlpha=.5f
+    const val AmbientAlpha=.38f
+    /** Light on the bar vs on the moving capsule: the capsule is the thicker, brighter piece of glass. */
+    const val BarEdgeLight=.4f
+    const val CapsuleEdgeLight=.85f
+    /** Tint over the sampled backdrop. Low on purpose: text behind the bar must stay readable. */
+    const val BarTintAlpha=.22f
+    const val CapsuleTintAlpha=.075f
+}
+
+/**
+ * Bevel depth in px for a lens of [heightPx], honouring the ratio limit and both absolute bounds.
+ * Pure so the clamp can be pinned without a device: the shipped defect was a fixed band that exceeded a
+ * short capsule and bent all of it, and the opposite defect (a band too thin to read as thick glass) is
+ * equally testable here.
+ */
+internal fun glassBandPx(heightPx:Float,drag:Boolean,density:Float):Float {
+    if(heightPx<=0f||density<=0f) return 1f
+    val ratio=heightPx*GlassOptics.BaseBandRatio
+    val cap=(if(drag)GlassOptics.DragBandMax else GlassOptics.BaseBandMax).value*density
+    val floor=GlassOptics.BandMin.value*density
+    return ratio.coerceAtMost(cap).coerceIn(floor,heightPx*.5f)
+}
+
+/**
+ * Peak displacement in px for a lens of [heightPx]: proportional to its bevel, so the lens thickness and the
+ * bend can never disagree. Never exceeds the bevel it is produced by.
+ */
+internal fun glassBendPx(heightPx:Float,drag:Boolean,density:Float):Float {
+    if(heightPx<=0f||density<=0f) return 0f
+    val band=glassBandPx(heightPx,drag,density)
+    val ratio=if(drag)GlassOptics.LensBendRatio else GlassOptics.BaseBendRatio
+    return (band*ratio).coerceAtMost(heightPx*.4f).coerceAtLeast(0f)
+}
+
+/** Upstream `circleMap`: displacement falls off as a circular profile across the bevel, not a sine. */
+internal fun glassCircleMap(x:Float):Float {
+    val t=x.coerceIn(0f,1f)
+    return 1f-Math.sqrt((1f-t*t).toDouble()).toFloat()
+}
 @Composable fun liquidDockHeight(fontScale:Float)=if(fontScale>1.3f)88.dp else 72.dp
 @Composable fun rememberBackdrop():PageBackdropState=rememberPageBackdrop(true)
 @Composable fun rememberPageBackdrop(blurEnabled:Boolean):PageBackdropState {
@@ -109,7 +176,9 @@ object GlassTokens {
 }
 
 private val titles=listOf("首页","账号","记录","设置")
-private val icons=listOf(Icons.Rounded.Home,Icons.Rounded.Person,Icons.Rounded.History,Icons.Rounded.Settings)
+// Icons come from the shared 24px rounded-stroke set owned by ui/HoshioriIcons.kt (root agent's scope);
+// this dock only picks the tint, so the selected colour keeps flowing through MaterialTheme.
+private val icons=listOf(HoshioriIcons.Home,HoshioriIcons.Accounts,HoshioriIcons.Records,HoshioriIcons.Settings)
 
 /** Number of dock slots; the drag math, the clamp and the semantics all read this one value. */
 private const val DockSlots=4
@@ -185,7 +254,31 @@ private const val DockCommitDistance=.5f
     // Handles a selection that changed while the dock was not composed (tab restore), where the effect
     // above cannot see it. Deliberately inert while a spring is running or a finger owns the capsule.
     SideEffect {if(!dragging.engaged&&!capsule.isRunning) onSettleNow(current.toFloat())}
-    val edge=Brush.linearGradient(listOf(Color.White.copy(alpha=if(dark).38f else .8f),colors.outlineVariant.copy(alpha=.15f),Color.White.copy(alpha=if(dark).14f else .45f)))
+    /*
+     * Lens thickness under the finger. The press is tracked on the dock's OWN interaction source, which the
+     * gesture layer below feeds; collectIsPressedAsState only flips once per press, so this costs one
+     * recomposition per press (not per frame) and never touches the page. The value itself is a plain field,
+     * so the swell is rendered by the capsule's layer lambda and not by this composition.
+     */
+    val dockInteraction=remember{MutableInteractionSource()}
+    val dockPressed by dockInteraction.collectIsPressedAsState()
+    LaunchedEffect(dockPressed) {
+        if(dockPressed) {
+            val start=withFrameNanos{it}
+            // Cheap, bounded ramp (160ms, frame clock, no infinite animation) so the swell reads as a bulge
+            // appearing under the finger instead of popping on.
+            while(true) {
+                val t=((withFrameNanos{it}-start)/1_000_000f/160f).coerceIn(0f,1f)
+                dragging.bulge=if(policy.motion)t else 1f
+                if(t>=1f) break
+            }
+        } else {
+            dragging.bulge=0f
+        }
+    }
+    // The border stays as the non-blur (API<31 / light material) rim. With blur on, the SDF edge light above
+    // supplies the rim, so this hairline only adds the thin hairline the reference keeps at the very edge.
+    val edge=Brush.linearGradient(listOf(Color.White.copy(alpha=if(policy.blur).22f else if(dark).38f else .8f),colors.outlineVariant.copy(alpha=.15f),Color.White.copy(alpha=if(policy.blur).10f else if(dark).14f else .45f)))
     Box(modifier.zIndex(1f).fillMaxWidth().navigationBarsPadding().padding(horizontal=GlassTokens.margin).padding(bottom=GlassTokens.lift),contentAlignment=Alignment.Center) {
         BoxWithConstraints(Modifier.widthIn(max=GlassTokens.maxWidth).fillMaxWidth().height(height)
             .onGloballyPositioned{position=it.positionInRoot()}
@@ -194,9 +287,12 @@ private const val DockCommitDistance=.5f
             .graphicsLayer{compositingStrategy=CompositingStrategy.Offscreen}.clip(shape)
             .then(if(enabled)Modifier else Modifier.semantics{invisibleToUser()})
             .testTag("floating-dock")) {
-            if(policy.blur) SampledGlass(source,{position},18f,34f,true,Modifier.matchParentSize())
-            Box(Modifier.matchParentSize().background(colors.surface.copy(alpha=if(off)1f else if(policy.blur).40f else .97f)))
-            if(!off)Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.White.copy(alpha=if(dark).10f else .24f),Color.Transparent,Color.White.copy(alpha=.035f)))).border(1.dp,edge,shape))
+            if(policy.blur) SampledGlass(source,{position},GlassTokens.blur.value,GlassTokens.corner.value,true,Modifier.matchParentSize())
+            // Smoked dark tint over the sample. Lower than a "frosted card" because the reference lets the
+            // page text behind the bar stay legible; the darkening comes from this veil, not from opacity alone.
+            Box(Modifier.matchParentSize().background(colors.surface.copy(alpha=if(off)1f else if(policy.blur)GlassOptics.BarTintAlpha else .97f)))
+            if(!off)Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.White.copy(alpha=if(dark).10f else .24f),Color.Transparent,Color.Black.copy(alpha=.05f)))).border(1.dp,edge,shape))
+            if(!off&&policy.blur)GlassEdgeLight(GlassTokens.corner.value,GlassOptics.BarEdgeLight,Modifier.matchParentSize())
             if(enabled) {
                 val cellWidth=(maxWidth-12.dp)/4
                 val cellPx=with(density){cellWidth.toPx()}
@@ -213,16 +309,19 @@ private const val DockCommitDistance=.5f
                         dragging.stretch(cellPx,capsule.value)
                         alpha=dragging.highlight
                     }.background(Brush.horizontalGradient(listOf(Color.Transparent,Color.White.copy(alpha=if(dark).26f else .5f),Color.Transparent))))
-                    if(policy.blur) SampledGlass(source,{
+                    if(policy.blur) CapsuleGlass(source,{
                         position+with(density){Offset((6.dp+cellWidth*capsule.value).toPx(),6.dp.toPx())}
-                    },3.5f,1000f,true,Modifier.matchParentSize())
-                    Box(Modifier.matchParentSize().background(if(off)colors.primaryContainer else colors.primary.copy(alpha=if(policy.blur).095f else .12f)))
-                    if(!off)Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.White.copy(alpha=if(dark).15f else .44f),Color.Transparent)))
-                        .border(1.dp,Brush.linearGradient(listOf(Color.White.copy(alpha=if(dark).48f else .85f),colors.primary.copy(alpha=.10f),Color.White.copy(alpha=.18f))),lensShape))
+                    },3.5f,density.density,{dragging.bulge},Modifier.matchParentSize())
+                    // Selected item is a small accent-tinted capsule, not a white translucent block: the page
+                    // sample stays visible through it, the accent only tints it.
+                    Box(Modifier.matchParentSize().background(if(off)colors.primaryContainer else colors.primary.copy(alpha=if(policy.blur)GlassOptics.CapsuleTintAlpha else .12f)))
+                    if(!off)Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.White.copy(alpha=if(dark).12f else .3f),Color.Transparent)))
+                        .border(1.dp,Brush.linearGradient(listOf(Color.White.copy(alpha=if(dark).4f else .7f),colors.primary.copy(alpha=.10f),Color.White.copy(alpha=.14f))),lensShape))
+                    if(!off&&policy.blur)GlassEdgeLight(50f,GlassOptics.CapsuleEdgeLight,Modifier.matchParentSize())
                 }
                 // Keep input on the ancestor of the selectable cells so physical taps reach them.
                 Row(Modifier.fillMaxSize()
-                    .dockDrag(enabled,current,dragging,cellPx,padPx,
+                    .dockDrag(enabled,current,dragging,cellPx,padPx,dockInteraction,
                         onDrag={fingers->scope.launch(start=kotlinx.coroutines.CoroutineStart.UNDISPATCHED){capsule.snapTo(fingers)}},
                         onSettle=onSettleNow,
                         onSelect={if(it!=current)onSelectNow(it)})
@@ -273,6 +372,11 @@ private class DockDrag(private val scope:CoroutineScope) {
     @Volatile var scaleX:Float=1f
     @Volatile var scaleY:Float=1f
     @Volatile var highlight:Float=0f
+    /**
+     * 0..1 thickness of the lens under the finger. Written on the pointer coroutine and on press changes,
+     * read only inside a graphicsLayer lambda, so a press or a drag never recomposes the dock.
+     */
+    var bulge by mutableFloatStateOf(0f)
 
     /**
      * Stretch and highlight for the capsule's CURRENT cell position: its distance from the slot it is
@@ -371,6 +475,7 @@ internal fun dockGestureKey(enabled:Boolean,motion:Boolean,cellPx:Int,padPx:Int)
     drag:DockDrag,
     cellPx:Float,
     padPx:Float,
+    interactionSource:MutableInteractionSource,
     onDrag:(fingers:Float)->Unit,
     onSettle:(Float)->Unit,
     onSelect:(Int)->Unit,
@@ -381,6 +486,32 @@ internal fun dockGestureKey(enabled:Boolean,motion:Boolean,cellPx:Int,padPx:Int)
     val dragCb by rememberUpdatedState(onDrag)
     val settleCb by rememberUpdatedState(onSettle)
     val selectCb by rememberUpdatedState(onSelect)
+    val source by rememberUpdatedState(interactionSource)
+    // Emit Press/Release so the lens can swell under the finger. Declarative on purpose
+    // (`Modifier.pointerInput` observer form), so this cannot interfere with travel, taps, release, cancel or
+    // the selectable cells.
+    // PointerEventType is an @JvmInline value class; it cannot be a `when` branch condition, so compare.
+    // `PointerEventType.Cancel` only exists from Compose 1.8, and this project is on 1.7.8, so cancellation is
+    // detected the original way: the gesture coroutine is cancelled and we emit Cancel from a finally block.
+    val pressFilter=Modifier.pointerInput(source,enabled) {
+        if(!enabled) return@pointerInput
+        awaitEachGesture {
+            val down=awaitFirstDown(requireUnconsumed=false)
+            val press=PressInteraction.Press(down.position)
+            source.tryEmit(press)
+            var released=false
+            try {
+                while(true) {
+                    if(awaitPointerEvent().changes.none { it.pressed }) {
+                        released=true
+                        break
+                    }
+                }
+            } finally {
+                source.tryEmit(if(released)PressInteraction.Release(press) else PressInteraction.Cancel(press))
+            }
+        }
+    }
     return pointerInput(dockGestureKey(enabled,true,cellPx.toInt(),padPx.toInt())) {
         if(!enabled) return@pointerInput
         awaitEachGesture {
@@ -427,70 +558,253 @@ internal fun dockGestureKey(enabled:Boolean,motion:Boolean,cellPx:Int,padPx:Int)
                     settleCb(target.toFloat())
                 }
             }
-            if(!released) {
+            if(released) {
+                source.tryEmit(PressInteraction.Release(PressInteraction.Press(Offset.Zero)))
+            } else {
                 // Cancelled, or a press that never crossed slop. A tap leaves the capsule untouched (so it
                 // behaves exactly as before this layer existed); a cancelled drag returns to its slot and
                 // switches nothing.
                 if(dragging) settleCb(originSlot.toFloat())
+                source.tryEmit(PressInteraction.Cancel(PressInteraction.Press(Offset.Zero)))
             }
         }
-    }
+    }.then(pressFilter)
 }
 
 /** The render node actually draws the translated page crop; its effect can therefore sample that content. */
 @Composable private fun SampledGlass(source:GraphicsLayer,origin:()->Offset,blurDp:Float,cornerDp:Float,refract:Boolean,modifier:Modifier) {
-    val optics=if(Build.VERSION.SDK_INT>=33&&refract)remember{runCatching{OpticalPass()}.getOrNull()} else null
+    val optics=if(Build.VERSION.SDK_INT>=33&&refract)remember{runCatching{OpticalPass()}.onFailure{android.util.Log.w("HoshioriGlass","Bar optics unavailable",it)}.getOrNull()} else null
     Box(modifier.graphicsLayer {
         val radius=(cornerDp*density).coerceAtMost(size.height/2f)
         val blur=blurDp*density
         renderEffect=if(Build.VERSION.SDK_INT>=33&&optics!=null) {
-            runCatching{optics.effect(size.width,size.height,radius,blur,density)}.getOrElse{BlurEffect(blur,blur,TileMode.Clamp)}
+            runCatching {
+                val h=size.height
+                val band=glassBandPx(h,false,density)
+                val bend=glassBendPx(h,false,density)
+                optics.effect(size.width,h,List(4){radius},band,h,bend,density,blur,GlassOptics.BarDispersion)
+            }.getOrElse{BlurEffect(blur,blur,TileMode.Clamp)}
         } else BlurEffect(blur,blur,TileMode.Clamp)
-        compositingStrategy=CompositingStrategy.Offscreen
+        // Same @RequiresApi(31) reasoning as CapsuleGlass: leave the compositing strategy at the default.
     }.drawBehind {
         val p=origin();translate(-p.x,-p.y){drawLayer(source)}
     })
 }
 
-/** Independently implemented local lens. No Flutter/FlClash shader code is embedded or translated. */
+/**
+ * Travelling capsule optics: a true lens over the sampled page, dispatching on the LIVE capsule position
+ * so following a finger costs GPU work only. [bulge] is 0..1 and swells the lens under the finger; it is
+ * written by [DockDrag] on the pointer coroutine and read here inside the layer lambda, so a press never
+ * causes a recomposition. Degrades to a plain blur (or to nothing on older APIs), which is exactly the
+ * fallback the dock already shipped with.
+ */
+@Composable private fun CapsuleGlass(source:GraphicsLayer,origin:()->Offset,blurDp:Float,density:Float,bulge:()->Float,modifier:Modifier) {
+    val optics=if(Build.VERSION.SDK_INT>=33)remember{runCatching{OpticalPass()}.onFailure{android.util.Log.w("HoshioriGlass","Capsule optics unavailable",it)}.getOrNull()} else null
+    Box(modifier.graphicsLayer {
+        val blur=blurDp*density
+        renderEffect=if(Build.VERSION.SDK_INT>=33&&optics!=null) {
+            runCatching {
+                val h=size.height
+                val band=glassBandPx(h,true,density)
+                val bend=glassBendPx(h,true,density)
+                // A capsule: all four radii converge on half the short side.
+                val shortSide=if(size.width<size.height)size.width else size.height
+                val r=shortSide/2f
+                // Press: a thicker lens and a stronger, wider rim rainbow under the finger.
+                val inflation=bulge()
+                val swell=bend*(1f+inflation*.45f)
+                val dispersion=GlassOptics.LensDispersion*(1f+inflation*1.1f)
+                optics.effect(size.width,h,List(4){r},band,h,-swell,density,blur,dispersion)
+            }.getOrElse{BlurEffect(blur,blur,TileMode.Clamp)}
+        } else BlurEffect(blur,blur,TileMode.Clamp)
+        // No CompositingStrategy here on purpose: it is @RequiresApi(31) and this function serves API 26+,
+        // while graphicsLayer{} is inline so the lambda is inlined into an unannotated body and lint
+        // rejects an SDK_INT guard written inside it. A renderEffect already gets its own RenderNode, so
+        // the offscreen pass is not needed for the capsule lens.
+    }.drawBehind {
+        val p=origin();translate(-p.x,-p.y){drawLayer(source)}
+    })
+}
+
+/**
+ * Lit rim + inner shadow drawn from the same SDF as the refraction, so the highlight follows the real
+ * rounded-rect geometry (corners included) instead of a straight gradient down the long edges.
+ *
+ * Split into two pass-throughs below so each one carries the `@RequiresApi(33)` it needs. Doing that by
+ * hand in a single function does not lint cleanly, because `graphicsLayer {}` is inline and its lambda is
+ * inlined into the caller's (unannotated) body.
+ */
+@Composable private fun GlassEdgeLight(cornerDp:Float,edgeAlpha:Float,modifier:Modifier) {
+    if(Build.VERSION.SDK_INT<33||edgeAlpha<=0f) return
+    GlassEdgeLightLayer(cornerDp,edgeAlpha,modifier,ambient=false)
+    GlassEdgeLightLayer(cornerDp,edgeAlpha,modifier,ambient=true)
+}
+
+@RequiresApi(33)
+@Composable private fun GlassEdgeLightLayer(cornerDp:Float,edgeAlpha:Float,modifier:Modifier,ambient:Boolean) {
+    val pass=remember(ambient){runCatching{EdgeLightPass(ambient)}.onFailure{android.util.Log.w("HoshioriGlass","Edge light unavailable",it)}.getOrNull()}
+    Box(modifier.graphicsLayer {
+        val r=(cornerDp*density).coerceAtMost(size.height/2f)
+        pass?.let{runCatching{renderEffect=it.effect(size.width,size.height,List(4){r},density)}}
+        // Named `edgeAlpha` on purpose: a parameter called `alpha` is shadowed by GraphicsLayerScope.alpha,
+        // so both sides of `alpha=alpha` would resolve to the receiver and the assignment would be a no-op.
+        alpha=edgeAlpha
+        compositingStrategy=if(ambient)CompositingStrategy.ModulateAlpha else CompositingStrategy.Offscreen
+    }.border(1.dp,Color.White,RoundedCornerShape(cornerDp.dp)))
+}
+
+/**
+ * Lens refracting the sampled page crop.
+ *
+ * The optical core is a faithful adaptation of the Apache-2.0 upstream library `backdrop`
+ * (Kyant0/AndroidLiquidGlass, `com.kyant.backdrop.internal.RoundedRectRefractionShaderString`,
+ * pinned at 65ab177e90e5c1d8c62e70cf7755841982da65f6). Copyright 2025 Kyant, Apache License 2.0;
+ * see assets/licenses/backdrop-apache-2.0.txt and THIRD_PARTY_NOTICES.md. Our changes: the source
+ * is the already-recorded page RenderNode instead of a Compose backdrop layer, uniforms are namespaced
+ * distinctly, the bevel band is expressed in dp, and dispersion reuses this shader instead of a second one.
+ *
+ * No FlClash (GPL) or NexioSchedule (AGPL) code is embedded or translated; only the Apache-2.0 upstream
+ * is adapted, and the effective library is reimplemented over the existing native AGSL pass.
+ */
 @RequiresApi(33)
 internal class OpticalPass {
     private val shader=android.graphics.RuntimeShader("""
         uniform shader scene;
         uniform float2 extent;
-        uniform float radius;
-        uniform float band;
-        uniform float bend;
-        half4 main(float2 p) {
-            float2 halfSize=extent*.5;
-            float2 centered=p-halfSize;
-            float2 q=abs(centered)-halfSize+radius;
-            float distance=length(max(q,float2(0)))+min(max(q.x,q.y),0)-radius;
-            float depth=max(-distance,0);
-            float profile=sin(clamp(depth/band,0,1)*3.14159265);
-            float2 corner=max(q,float2(0));
-            float2 normal=length(corner)>.001 ? normalize(corner)*sign(centered) :
-                (q.x>q.y ? float2(sign(centered.x),0) : float2(0,sign(centered.y)));
-            float2 shifted=p-normal*bend*profile;
-            float2 spread=normal*.35*profile;
-            half4 center=scene.eval(clamp(shifted,float2(.5),extent-.5));
-            half red=scene.eval(clamp(shifted+spread,float2(.5),extent-.5)).r;
-            half blue=scene.eval(clamp(shifted-spread,float2(.5),extent-.5)).b;
-            return half4(min(half3(red,center.g,blue),half3(center.a)),center.a);
+        uniform float2 inset;
+        uniform float4 radii;
+        uniform float refractionHeight;
+        uniform float refractionAmount;
+        uniform float depthEffect;
+        uniform float chromaticAberration;
+
+        float radiusAt(float2 coord,float4 r) {
+            if (coord.x>=0.0) { return coord.y<=0.0 ? r.y : r.z; }
+            return coord.y<=0.0 ? r.x : r.w;
+        }
+        float sdRoundedRect(float2 coord,float2 halfSize,float radius) {
+            float2 c=abs(coord)-(halfSize-float2(radius));
+            return length(max(c,float2(0.0)))-radius+min(max(c.x,c.y),0.0);
+        }
+        float2 gradSdRoundedRect(float2 coord,float2 halfSize,float radius) {
+            float2 c=abs(coord)-(halfSize-float2(radius));
+            if (c.x>=0.0||c.y>=0.0) { return sign(coord)*normalize(max(c,float2(0.0))+float2(0.00001)); }
+            float g=step(c.y,c.x);
+            return sign(coord)*float2(g,1.0-g);
+        }
+        float circleMap(float x) { return 1.0-sqrt(1.0-x*x); }
+
+        half4 main(float2 coord) {
+            float2 halfSize=extent*0.5;
+            float2 centered=(coord+inset)-halfSize;
+            float radius=radiusAt(coord,radii);
+            float sd=sdRoundedRect(centered,halfSize,radius);
+            if (-sd>=refractionHeight) { return scene.eval(coord); }
+            sd=min(sd,0.0);
+            float d=circleMap(1.0-(-sd)/refractionHeight)*refractionAmount;
+            float gradRadius=min(radius*1.5,min(halfSize.x,halfSize.y));
+            float2 grad=normalize(gradSdRoundedRect(centered,halfSize,gradRadius)+depthEffect*normalize(centered+float2(0.00001)));
+            float2 refracted=clamp(coord+d*grad,float2(0.5),extent-0.5);
+            if (chromaticAberration<=0.0) { return scene.eval(refracted); }
+            float spread=chromaticAberration*((centered.x*centered.y)/max(halfSize.x*halfSize.y,1.0))*d;
+            float2 axis=grad*spread;
+            half4 c=scene.eval(refracted)*half4(0.2,0.2,0.2,0.6);
+            c+=scene.eval(clamp(refracted-axis,float2(0.5),extent-0.5))*half4(0.3,0.0,0.0,0.1);
+            c+=scene.eval(clamp(refracted-axis*0.5,float2(0.5),extent-0.5))*half4(0.2,0.2,0.0,0.1);
+            c+=scene.eval(clamp(refracted+axis*0.5,float2(0.5),extent-0.5))*half4(0.0,0.2,0.2,0.1);
+            c+=scene.eval(clamp(refracted+axis,float2(0.5),extent-0.5))*half4(0.0,0.0,0.3,0.1);
+            return c;
         }
     """.trimIndent())
     private var key:List<Float> = emptyList()
     private var cached:RenderEffect?=null
-    fun effect(width:Float,height:Float,radius:Float,blur:Float,density:Float):RenderEffect {
-        val next=listOf(width,height,radius,blur,density)
+
+    /**
+     * @param h       lens height in px (kept as a key: the band already scales with it)
+     * @param radii   corner radii as top-left, top-right, bottom-right, bottom-left in px
+     * @param amount  signed displacement peak in px; negative pulls the rim outwards (a raised lens)
+     */
+    fun effect(width:Float,height:Float,radii:List<Float>,band:Float,h:Float,amount:Float,density:Float,blur:Float,dispersion:Float):RenderEffect {
+        val next=listOf(width,height)+radii+listOf(band,h,amount,density,blur,dispersion)
         if(key==next)cached?.let{return it}
         shader.setFloatUniform("extent",width,height)
-        shader.setFloatUniform("radius",radius)
-        shader.setFloatUniform("band",(8*density).coerceAtMost(height/2f).coerceAtLeast(1f))
-        shader.setFloatUniform("bend",2.2f*density)
+        // A lens is applied per draw node, so the only node carrying the shader is the dock itself: no
+        // offset is needed, and the band alone decides how deep the bend reaches. That keeps a tall bar
+        // from bending its interior (a calm middle) while still concentrating the bend on the rim.
+        shader.setFloatUniform("inset",0f,0f)
+        shader.setFloatUniform("radii",radii[0],radii[1],radii[2],radii[3])
+        shader.setFloatUniform("refractionHeight",band.coerceAtLeast(1f))
+        shader.setFloatUniform("refractionAmount",amount)
+        shader.setFloatUniform("depthEffect",if(dispersion>0f)1f else 0f)
+        shader.setFloatUniform("chromaticAberration",dispersion)
         val lens=android.graphics.RenderEffect.createRuntimeShaderEffect(shader,"scene")
         val gaussian=android.graphics.RenderEffect.createBlurEffect(blur,blur,android.graphics.Shader.TileMode.CLAMP)
         // Native contract: outer(inner(source)). Both operate on this node's drawn page crop.
         return android.graphics.RenderEffect.createChainEffect(lens,gaussian).asComposeRenderEffect().also{key=next;cached=it}
+    }
+}
+
+/**
+ * Edge light for the glass rim, adapted from the Apache-2.0 upstream `backdrop` highlight pair
+ * (DefaultHighlightShaderString / AmbientHighlightShaderString, Copyright 2025 Kyant, Apache-2.0).
+ *
+ * Difference from a flat white border: brightness is `|dot(grad(SDF), normal)|^falloff`, so the rim is
+ * lit only where the surface normal faces the light, and the inner shadow is one-sided (ambient). That
+ * is what makes a rim read as glass instead of as paint. Values follow the upstream defaults: 45 degrees,
+ * falloff 1, white at alpha .5 for the lit half, white at .38 for the ambient half.
+ */
+@RequiresApi(33)
+internal class EdgeLightPass(private val ambient:Boolean) {
+    private val shader=android.graphics.RuntimeShader("""
+        uniform shader content;
+        uniform float ambientPass;
+        uniform float2 extent;
+        uniform float4 radii;
+        uniform float angle;
+        uniform float falloff;
+        layout(color) uniform half4 light;
+
+        float radiusAt(float2 coord,float4 r) {
+            if (coord.x>=0.0) { return coord.y<=0.0 ? r.y : r.z; }
+            return coord.y<=0.0 ? r.x : r.w;
+        }
+        float sdRoundedRect(float2 coord,float2 halfSize,float radius) {
+            float2 c=abs(coord)-(halfSize-float2(radius));
+            return length(max(c,float2(0.0)))-radius+min(max(c.x,c.y),0.0);
+        }
+        float2 gradSdRoundedRect(float2 coord,float2 halfSize,float radius) {
+            float2 c=abs(coord)-(halfSize-float2(radius));
+            if (c.x>=0.0||c.y>=0.0) { return sign(coord)*normalize(max(c,float2(0.0))+float2(0.00001)); }
+            float g=step(c.y,c.x);
+            return sign(coord)*float2(g,1.0-g);
+        }
+
+        half4 main(float2 coord) {
+            float2 halfSize=extent*0.5;
+            float2 centered=coord-halfSize;
+            float radius=radiusAt(coord,radii);
+            float gradRadius=min(radius*1.5,min(halfSize.x,halfSize.y));
+            float2 grad=gradSdRoundedRect(centered,halfSize,gradRadius);
+            float d=dot(grad,float2(cos(angle),sin(angle)));
+            float intensity=pow(abs(d),falloff);
+            half4 rim=ambientPass>0.5 ? half4(step(0.0,d)*light.a*intensity) : light*intensity;
+            return rim*content.eval(coord).a;
+        }
+    """.trimIndent())
+    private var key:List<Float> = emptyList()
+    private var cached:RenderEffect?=null
+
+    fun effect(width:Float,height:Float,radii:List<Float>,density:Float):RenderEffect {
+        val next=listOf(width,height)+radii+listOf(density)
+        if(key==next)cached?.let{return it}
+        shader.setFloatUniform("extent",width,height)
+        shader.setFloatUniform("radii",radii[0],radii[1],radii[2],radii[3])
+        // Fully qualified: these live on GlassOptics, not in this class's scope.
+        shader.setFloatUniform("angle",GlassOptics.EdgeLightAngleDegrees*(PI.toFloat()/180f))
+        shader.setFloatUniform("ambientPass",if(ambient)1f else 0f)
+        shader.setFloatUniform("falloff",GlassOptics.EdgeLightFalloff)
+        val a=if(ambient)GlassOptics.AmbientAlpha else GlassOptics.LitAlpha
+        shader.setFloatUniform("light",a,a,a,a)
+        return android.graphics.RenderEffect.createRuntimeShaderEffect(shader,"content").asComposeRenderEffect().also{key=next;cached=it}
     }
 }

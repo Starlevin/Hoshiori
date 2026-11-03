@@ -1,0 +1,53 @@
+Backdrop — Compose Multiplatform Liquid Glass effects
+https://github.com/Kyant0/AndroidLiquidGlass
+Pinned commit: 65ab177e90e5c1d8c62e70cf7755841982da65f6 (branch "kmp")
+Maven coordinates: io.github.kyant0:backdrop:2.0.1
+
+Copyright 2025 Kyant
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+The full license text is packaged as assets/licenses/backdrop-apache-2.0.txt.
+
+Modifications by Starlevin / GlassSign (v0.7.6, 2026-11-02)
+------------------------------------------------------------
+The liquid-glass optics of this app's dock are a MODIFIED adaptation of the
+upstream AGSL shaders in
+  backdrop/src/commonMain/kotlin/com/kyant/backdrop/internal/Shaders.kt
+specifically RoundedRectSDF, RoundedRectRefractionShaderString,
+DefaultHighlightShaderString and AmbientHighlightShaderString.
+
+Adapted into (no upstream Kotlin code, no upstream module, no dependency added):
+  android/app/src/main/java/com/glasssign/app/ui/LiquidDock.kt
+    - internal class OpticalPass    (lens: SDF, circleMap profile, SDF gradient, refraction)
+    - internal class EdgeLightPass  (lit rim and ambient inner shadow)
+
+Changes made:
+  * The shader source is an Android graphics RuntimeShader (AGSL) written against this
+    app's own uniforms, not the Compose backdrop library's RuntimeShader wrappers.
+  * The sampled source is the app's already-recorded page RenderNode
+    (androidx.compose.ui.graphics.layer.GraphicsLayer), not a Compose Backdrop layer.
+  * The bevel depth ("refractionHeight") is derived in dp from the lens height and both
+    clamped and floored, so the bend stays a rim on a short capsule.
+  * The refraction amount is derived from that same bevel instead of being an
+    independent parameter.
+  * Chromatic dispersion folds six upstream spectral taps into a single five-tap pass
+    that reuses the same shader object instead of a second shader variant.
+  * Highlight alpha, geometry insets and the blur chain are tuned to this app's dock;
+    upstream's catalog demo values are not reproduced verbatim.
+  * Uniform names are this app's own; no upstream module or Kotlin API is reused.
+
+No FlClash (GPL-3.0) or NexioSchedule (AGPL-3.0) source code, shader, image or asset is
+copied, translated or embedded here. Those projects were consulted for provenance and
+design intent only; their application code is not compatible with this project's MIT
+license and was not used.

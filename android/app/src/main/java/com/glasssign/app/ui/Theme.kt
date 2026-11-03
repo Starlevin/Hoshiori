@@ -12,6 +12,46 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import com.glasssign.app.ui.background.BackgroundPreferences
+import com.glasssign.app.ui.background.BackgroundRepository
+import com.glasssign.app.ui.background.BackgroundSource
+import com.glasssign.app.ui.background.HoshioriBackground
+import com.glasssign.app.ui.background.LocalBackgroundEnabled
+import com.glasssign.app.ui.background.decodePreview
+import com.glasssign.app.ui.background.persistPickedImage
+import android.content.SharedPreferences
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.layout.ContentScale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Slider
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalView
@@ -59,6 +99,30 @@ val ChipShape = RoundedCornerShape(999.dp)
 
 val LocalReduceMotion = staticCompositionLocalOf { false }
 
+/**
+ * Page wallpaper state for the rest of the UI.
+ *
+ * [LocalBackgroundPreferences] is the committed preference value; the dialog holds a draft while a slider
+ * is being dragged and publishes the draft through [LocalBackgroundPreview] only, so the page preview and
+ * the slider share one value without writing the preferences file per pixel.
+ * [LocalBackgroundRepository] is null outside [GlassSignTheme] (previews, tests) and every consumer treats
+ * null as "no background".
+ */
+val LocalBackgroundPreferences = staticCompositionLocalOf { BackgroundPreferences() }
+val LocalBackgroundPreview = staticCompositionLocalOf<BackgroundPreferences?> { null }
+val LocalBackgroundRepository = staticCompositionLocalOf<BackgroundRepository?> { null }
+val LocalBackgroundBindings = staticCompositionLocalOf<BackgroundBindings?> { null }
+
+/** Everything that writes background state, provided by [GlassSignTheme] and used only by AppearanceDialog. */
+class BackgroundBindings(
+    /** Persists a final value (mask/blur/source). */
+    val commit: (BackgroundPreferences) -> Unit,
+    /** Shows an uncommitted value on the page while a slider is moving. */
+    val preview: (BackgroundPreferences) -> Unit,
+    /** Goes back to the committed value when the drag ends or is cancelled. */
+    val clearPreview: () -> Unit,
+)
+
 data class ProviderMeta(
     val id: String,
     val title: String,
@@ -69,6 +133,150 @@ data class ProviderMeta(
     val sample: String,
     val help: String,
 )
+
+/**
+ * Custom page background section of [AppearanceDialog].
+ *
+ * Uses the system picker only (PhotoPicker on API 33+, the document picker before it), so the app needs no
+ * storage permission and no URI permission survives the session: the bytes are copied into the private
+ * store first. The sliders preview through [BackgroundBindings.preview] during the drag and write once on
+ * release, exactly like the existing text-scale slider.
+ */
+@Composable
+internal fun BackgroundSettingsSection() {
+    val context = LocalContext.current
+    val repository = LocalBackgroundRepository.current
+    val bindings = LocalBackgroundBindings.current
+    val committed = LocalBackgroundPreview.current ?: LocalBackgroundPreferences.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var draft by remember { mutableStateOf<BackgroundPreferences?>(null) }
+    var preview by remember { mutableStateOf<ImageBitmap?>(null) }
+    val shown = draft ?: committed
+
+    fun refreshPreview() {
+        scope.launch {
+            preview = withContext(Dispatchers.Default) { decodePreview(context, 480)?.asImageBitmap() }
+        }
+    }
+    LaunchedEffect(committed.source) {
+        if (committed.source == BackgroundSource.custom) refreshPreview() else preview = null
+    }
+    DisposableEffect(Unit) { onDispose { preview = null } }
+
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        val repo = repository
+        if (uri == null || repo == null) return@rememberLauncherForActivityResult
+        busy = true
+        message = null
+        scope.launch {
+            val result = runCatching { persistPickedImage(repo, uri, committed) }
+            busy = false
+            result.onSuccess { saved ->
+                // Commit right away: the bytes are already in the private store, so the page can switch
+                // before the user releases any slider.
+                bindings?.commit(saved)
+                message = "已保存到本机，可随时清除"
+                refreshPreview()
+            }.onFailure { message = it.message ?: "无法保存所选图片" }
+        }
+    }
+
+    Text("页面背景", style = MaterialTheme.typography.titleMedium)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = committed.source == BackgroundSource.none,
+            onClick = {
+                message = null
+                scope.launch {
+                    val repo = repository
+                    if (repo != null) {
+                        busy = true
+                        bindings?.commit(runCatching { repo.clear(committed) }.getOrDefault(committed))
+                        busy = false
+                    } else {
+                        bindings?.commit(committed.copy(source = BackgroundSource.none))
+                    }
+                    preview = null
+                }
+            },
+            label = { Text("无背景") },
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+        )
+        FilterChip(
+            selected = committed.source == BackgroundSource.starfield,
+            onClick = {
+                message = null
+                // No file copy and no disk read: the bundled artwork is decoded in the page composable once.
+                bindings?.commit(committed.copy(source = BackgroundSource.starfield))
+            },
+            label = { Text("星海") },
+            enabled = !busy,
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+        )
+        FilterChip(
+            selected = committed.source == BackgroundSource.custom,
+            onClick = {
+                if (repository == null) return@FilterChip
+                picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            },
+            label = { Text(if (committed.source == BackgroundSource.custom) "换图" else "自选") },
+            enabled = !busy && repository != null,
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+        )
+    }
+    Text(
+        "「星海」为内置插画，只是背景选项，不会改动你已选的主题色。自选图片使用系统照片选择器读取，不需要存储权限；" +
+            "图片只保存在本应用私有目录，不上传，清除后恢复默认背景。",
+        style = MaterialTheme.typography.bodySmall, color = Muted,
+    )
+    if (busy) {
+        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            Text("正在处理图片…", style = MaterialTheme.typography.bodySmall, color = Muted)
+        }
+    }
+    message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Muted) }
+
+    if (shown.source != BackgroundSource.none) {
+        Spacer(Modifier.height(8.dp))
+        preview?.let { bitmap ->
+            // Preview decodes the stored copy once and is reused while the source does not change; it is
+            // never decoded per frame and released with the dialog.
+            Surface(shape = GlassShape, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                androidx.compose.foundation.Image(bitmap, contentDescription = "当前背景预览",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+            }
+        }
+        // One draft for both sliders: showing `draft ?: committed` for each would let the first drag reset
+        // the other value to the committed one.
+        val mask = shown.maskStrength
+        Text("遮罩强度 ${(mask * 100).toInt()}%", color = Muted, style = MaterialTheme.typography.bodyLarge)
+        Slider(
+            value = mask, valueRange = BackgroundPreferences.MaskRange, steps = 16,
+            onValueChange = { value -> draft = shown.copy(maskStrength = value).also { bindings?.preview(it) } },
+            onValueChangeFinished = {
+                val finished = draft ?: shown
+                draft = null
+                bindings?.commit(finished)
+            },
+        )
+        val blur = shown.blurDp
+        Text("背景模糊 ${blur.toInt()} dp", color = Muted, style = MaterialTheme.typography.bodyLarge)
+        Slider(
+            value = blur, valueRange = BackgroundPreferences.BlurRange, steps = 9,
+            onValueChange = { value -> draft = shown.copy(blurDp = value).also { bindings?.preview(it) } },
+            onValueChangeFinished = {
+                val finished = draft ?: shown
+                draft = null
+                bindings?.commit(finished)
+            },
+        )
+        Text("遮罩与模糊只作用于背景图片，文字和卡片保持原有对比度。", style = MaterialTheme.typography.bodySmall, color = Muted)
+    }
+}
 
 val Providers = listOf(
     ProviderMeta(
@@ -239,7 +447,38 @@ fun GlassSignTheme(reduceMotion: Boolean, content: @Composable () -> Unit) {
     )}}
     val density=LocalDensity.current
     val scaled=remember(density,settings.scaleEnabled,settings.textScale){Density(density.density,density.fontScale*if(settings.scaleEnabled)settings.textScale else 1f)}
-    CompositionLocalProvider(LocalReduceMotion provides reduceMotion,LocalAppearance provides settings,LocalAppearanceController provides controller,LocalDensity provides scaled) {
+    val backgroundRepository=remember(context.applicationContext){BackgroundRepository(context.applicationContext)}
+    // `commit` is a plain (non-suspend) callback because the dialog calls it from slider handlers; the
+    // preference write is a small file write on IO, so it is launched instead of awaited.
+    val backgroundScope=rememberCoroutineScope()
+    var backgroundPreferences by remember(backgroundRepository){mutableStateOf(backgroundRepository.readPreferences())}
+    // Preview never persists: the drag path writes this state only, the release writes the file once.
+    var backgroundPreview by remember(backgroundRepository){mutableStateOf<BackgroundPreferences?>(null)}
+    // Owns a decoded bitmap, so it must be released with the theme, not with the page composable.
+    DisposableEffect(backgroundRepository){onDispose{backgroundRepository.release()}}
+    // Cold start only: repair an interrupted copy and drop a `custom` whose file no longer decodes.
+    LaunchedEffect(backgroundRepository){backgroundPreferences=backgroundRepository.recover()}
+    val changeListener=remember(backgroundRepository){SharedPreferences.OnSharedPreferenceChangeListener { _,_->backgroundPreferences=backgroundRepository.readPreferences() }}
+    DisposableEffect(backgroundRepository,changeListener) {
+        val prefs=context.applicationContext.getSharedPreferences("appearance_v1",Context.MODE_PRIVATE)
+        prefs.registerOnSharedPreferenceChangeListener(changeListener)
+        onDispose{prefs.unregisterOnSharedPreferenceChangeListener(changeListener)}
+    }
+    // Only the boolean reaches consumers (card alpha in HoshioriScreen), so a mask slider drag does not
+    // recompose the page: LocalBackgroundEnabled is a separate, stable-valued CompositionLocal.
+    val backgroundEnabled=(backgroundPreview?:backgroundPreferences).enabled
+    CompositionLocalProvider(
+        LocalReduceMotion provides reduceMotion,LocalAppearance provides settings,LocalAppearanceController provides controller,LocalDensity provides scaled,
+        LocalBackgroundRepository provides backgroundRepository,
+        LocalBackgroundPreferences provides backgroundPreferences,
+        LocalBackgroundPreview provides backgroundPreview,
+        LocalBackgroundEnabled provides backgroundEnabled,
+        LocalBackgroundBindings provides BackgroundBindings(
+            commit={value->backgroundPreferences=value;backgroundPreview=null;backgroundScope.launch{backgroundRepository.savePreferences(value)}},
+            preview={value->backgroundPreview=value},
+            clearPreview={backgroundPreview=null},
+        ),
+    ) {
         MaterialTheme(colorScheme=scheme,typography=typography){CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides scheme.onBackground,content=content)}
     }
 }

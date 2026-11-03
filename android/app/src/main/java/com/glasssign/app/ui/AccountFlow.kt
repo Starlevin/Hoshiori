@@ -139,11 +139,19 @@ private fun GameCard(
     val games=remember(p.provider){GameCatalog.all.filter{it.provider==p.provider}}
     val rolesByGame=remember(p.roleChoices){p.roleChoices.groupBy{it.gameId}}
     val selectedRoleIds=p.selectedRoleIds
+    // Same identity semantics as the account card and the detail header (data/AccountDisplay.kt): official
+    // name+tag first, the typed remark as its own line, masked platform UID as a supplement. The draft account id
+    // is never shown, and roles are only counted once they have been read.
+    val identity=remember(p.provider,p.nickname,p.providerUserId,p.roleChoices){
+        pendingDisplay(p.provider,p.nickname,p.providerUserId,p.roleChoices,p.roleChoices.map{it.targetId}.toSet())
+    }
     ModalBottomSheet(onDismissRequest={if(!busy)onCancel()},sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true)) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal=24.dp).padding(bottom=32.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
             AccountStepTitle(if(p.confirming)"确认绑定" else if(p.existingAccount)"管理游戏与角色" else "选择游戏 / 角色")
-            Text("${providerMeta(p.provider).title} · ${safeLabel(p.nickname)}",style=MaterialTheme.typography.titleMedium,maxLines=2,overflow=TextOverflow.Ellipsis)
-            Text(if(p.providerUserId.isBlank())"平台未提供社区账号 ID" else "账号 ${maskedIdentity(p.providerUserId)}",color=Muted,maxLines=1,overflow=TextOverflow.Ellipsis)
+            Text(safeLabel(identity.title),style=MaterialTheme.typography.titleMedium,maxLines=2,overflow=TextOverflow.Ellipsis)
+            identity.customNote?.let{Text("备注 · ${safeLabel(it)}",color=Muted,maxLines=1,overflow=TextOverflow.Ellipsis)}
+            if(p.providerUserId.isBlank())Text("平台未提供社区账号 ID · 按备注与角色核对",color=Muted,maxLines=1,overflow=TextOverflow.Ellipsis)
+            else identity.platformLine?.let{Text(it,color=Muted,maxLines=1,overflow=TextOverflow.Ellipsis)}
             if(p.providerUserId.isBlank()) {
                 Text("账号 ID 不可用时无法自动判重，请核对本次角色与账号。授权是否有效以下方角色读取结果为准。",style=MaterialTheme.typography.bodySmall,color=Muted)
                 Row(Modifier.fillMaxWidth().heightIn(min=48.dp).toggleable(identityChecked,role=Role.Checkbox,onValueChange={identityChecked=it}).testTag("identity-confirm"),verticalAlignment=Alignment.CenterVertically){Checkbox(identityChecked,null);Text("我已核对这是本次要绑定的账号")}

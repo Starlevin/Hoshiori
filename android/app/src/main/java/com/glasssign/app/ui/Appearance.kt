@@ -273,6 +273,8 @@ fun AppearanceDialog(onDismiss:()->Unit) {
         Text("对应玻璃效果的静态层次档位。仅改变表面、边框和高光，不启用实时模糊。",style=MaterialTheme.typography.bodySmall,color=Muted)
         SettingSwitch("导航色彩融合","底部导航使用淡主题色背景",settings.navigationTint){update(settings.copy(navigationTint=it))}
         DividerLine(Modifier.padding(vertical=12.dp))
+        BackgroundSettingsSection()
+        DividerLine(Modifier.padding(vertical=12.dp))
         SettingSwitch("自定义文字缩放","关闭时跟随系统字体大小",settings.scaleEnabled){update(settings.copy(scaleEnabled=it))}
         if(settings.scaleEnabled) {
             val shown=draftScale?:settings.textScale

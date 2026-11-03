@@ -2,7 +2,7 @@
 
 Android 纯本地游戏签到工具，由手机直接访问社区服务；不依赖自建云服务器、Root或Shizuku。
 
-当前分支：**v0.7.5 开发候选**。保留原安装包标识、密钥别名和本机数据，支持增量覆盖升级。新增[Dock拖动、分项反馈与森空岛续期/状态核对](docs/v075-report.md)，前版的[Android签名转义修复](docs/v074-report.md)、[设备缓存解析修复](docs/v073-report.md)及[可选领签扩展](docs/v072-report.md)继续保留。请同时阅读[15项验收矩阵与限制](docs/v070-report.md)，自动化通过不代表四社区实号或所有真机条件已通过。
+正式版下载：[GitHub Releases](https://github.com/Starlevin/Hoshiori/releases) · [夸克永久发布目录](https://pan.quark.cn/s/739482783865)（无提取码，按版本分类）。本分支为 **v0.7.6**，新增官方角色默认显示、可选背景、原创品牌、玻璃光学及双通道检查更新，见[本版交接与验收](docs/v076-report.md)，实际发布版本以下载通道为准。保留[森空岛续期与状态核对](docs/v075-report.md)及[15项验收矩阵与限制](docs/v070-report.md)，自动化通过不代表四社区实号或所有真机条件已通过。
 
 ## 使用流程
 
@@ -37,10 +37,10 @@ Jetpack Compose实现四页与独立悬浮Dock。选中胶囊使用弹性过渡�
 
 ```shell
 cd android
-./gradlew --no-daemon --max-workers=2 :app:assembleDebug :app:testDebugUnitTest :app:assembleDebugAndroidTest :app:lintDebug
+./gradlew --no-daemon --max-workers=2 :app:assembleRelease :app:testReleaseUnitTest :app:lintRelease
 ```
 
-调试APK在`android/app/build/outputs/apk/debug/app-debug.apk`。覆盖升级须使用同包名、同签名的安装包，不要先卸载或清数据。CI默认调试签名不同，CI APK不能作为原手机的覆盖更新包；正式发布签名由用户另行配置。
+默认仅构建 Release。上述 Gradle 命令生成未签名 APK，不能直接分发；维护者 Windows 可运行 `android/build-release.ps1` 完成检查及既有正式签名校验。CI 的 unsigned 构建只供验证。正式签名自 v0.7.5 固定；覆盖升级须同包名、同签名，不要先卸载或清数据。旧 `.debug` 测试包数据不会自动共享到正式包。每次正式发布同步 GitHub 与夸克，见[发布流程](docs/RELEASE_PROCESS.md)。
 
 - [v0.7.0审计与实施计划](docs/v070-audit-and-plan.md)
 - [v0.7.0验收矩阵、协议边界与交接](docs/v070-report.md)

@@ -12,8 +12,8 @@ android {
         applicationId = "com.glasssign.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "0.7.5"
+        versionCode = 16
+        versionName = "0.7.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         resourceConfigurations += listOf("zh", "en")
     }
@@ -57,6 +57,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     implementation("androidx.work:work-runtime-ktx:2.10.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
