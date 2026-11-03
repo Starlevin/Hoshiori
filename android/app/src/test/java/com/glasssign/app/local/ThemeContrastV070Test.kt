@@ -62,11 +62,11 @@ class ThemeContrastV070Test {
         assertEquals(144,checked)
     }
 
-    /** pureBlack must not change anything except making the background/surface darker. */
+    /** True OLED (frontend-miuix-preview): pureBlack makes background AND surface pure black, not grey. */
     @Test fun pureBlackKeepsSecondaryTextReadableOnTheOledSurface() {
         for(style in styles) {
             val c=appearanceScheme(AppearanceSettings(seed=0xFF4263C7.toInt(),colorStyle=style,pureBlack=true),true,null)
-            assertEquals(Color(0xFF101010).toArgb(),c.surface.toArgb())
+            assertEquals(Color.Black.toArgb(),c.surface.toArgb())
             assertEquals(Color.Black.toArgb(),c.background.toArgb())
             assertTrue(contrast(c.onSurfaceVariant,c.surface)>=aa)
             assertTrue(contrast(c.onSurface,c.background)>=aa)
