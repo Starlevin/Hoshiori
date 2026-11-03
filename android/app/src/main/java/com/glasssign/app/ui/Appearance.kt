@@ -283,7 +283,11 @@ fun AppearanceDialog(onDismiss:()->Unit) {
             Box(Modifier.size(40.dp).background(pickerColor,CircleShape).border(1.dp,MaterialTheme.colorScheme.outlineVariant,CircleShape))
             Text("#%02X%02X%02X".format(pickerRed,pickerGreen,pickerBlue),style=MaterialTheme.typography.bodyLarge)
             Spacer(Modifier.weight(1f))
-            TextButton(onClick={update(settings.copy(seed=(0xFF000000 or (pickerRed shl 16) or (pickerGreen shl 8) or pickerBlue).toInt(),dynamicColor=false,customColors=(settings.customColors+(0xFF000000 or (pickerRed shl 16) or (pickerGreen shl 8) or pickerBlue).toInt()).distinct().takeLast(8)))},modifier=Modifier.heightIn(min=48.dp)){Text("应用此颜色")}
+            // CI fix: 0xFF000000 is a Long literal in Kotlin, so `or` with Int shifts
+            // failed compileReleaseKotlin at line 286. Build the ARGB value with Int
+            // shifts only: 0xFF shl 24 is an Int (negative, as all opaque ARGB ints are).
+            val pickerArgb=(0xFF shl 24) or (pickerRed shl 16) or (pickerGreen shl 8) or pickerBlue
+            TextButton(onClick={update(settings.copy(seed=pickerArgb,dynamicColor=false,customColors=(settings.customColors+pickerArgb).distinct().takeLast(8)))},modifier=Modifier.heightIn(min=48.dp)){Text("应用此颜色")}
         }
         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
             Text("红",style=MaterialTheme.typography.bodyMedium,modifier=Modifier.width(20.dp))
