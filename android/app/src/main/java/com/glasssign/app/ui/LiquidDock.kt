@@ -55,8 +55,11 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import com.kyant.backdrop.backdrops.LayerBackdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 
-class PageBackdropState(val cached:GraphicsLayer,val capture:Boolean=true) {
+class PageBackdropState(val cached:GraphicsLayer,val capture:Boolean=true,val upstream:LayerBackdrop?=null) {
     var ready by mutableStateOf(false)
         internal set
     var captureRevision by mutableIntStateOf(0)
@@ -66,7 +69,13 @@ class PageBackdropState(val cached:GraphicsLayer,val capture:Boolean=true) {
 fun Modifier.backdropSource(layer:GraphicsLayer,enabled:Boolean):Modifier=if(!enabled)this else drawWithContent {
     layer.record {this@drawWithContent.drawContent()};drawLayer(layer)
 }
-fun Modifier.backdropSource(state:PageBackdropState):Modifier=if(!state.capture)this else drawWithContent {
+fun Modifier.backdropSource(state:PageBackdropState):Modifier=if(!state.capture)this else if(state.upstream!=null)
+    layerBackdrop(state.upstream).drawWithContent {
+        @Suppress("UNUSED_VARIABLE") val revision=state.captureRevision
+        drawContent()
+        if(!state.ready&&size.width>0f&&size.height>0f)state.ready=true
+    }
+else drawWithContent {
     @Suppress("UNUSED_VARIABLE") val revision=state.captureRevision
     state.cached.record {this@drawWithContent.drawContent()}
     drawLayer(state.cached)
@@ -229,7 +238,8 @@ internal fun dockBottomPaddingPx(overlapPx:Float,density:Density):Dp {
 @Composable fun rememberBackdrop():PageBackdropState=rememberPageBackdrop(true)
 @Composable fun rememberPageBackdrop(blurEnabled:Boolean):PageBackdropState {
     val layer=rememberGraphicsLayer()
-    return remember(layer,blurEnabled){PageBackdropState(layer,blurEnabled)}
+    val upstream=rememberLayerBackdrop(layer)
+    return remember(layer,blurEnabled,upstream){PageBackdropState(layer,blurEnabled,upstream)}
 }
 
 private val titles=listOf("首页","账号","记录","设置")
@@ -279,7 +289,9 @@ private const val DockCommitDistance=.5f
     // Material activation replaces the provisional layer once, so its first opaque display list
     // cannot retain an empty shared-input cache. This key is stable throughout navigation/dragging.
     key(sampledFrameReady) {
-        Dock(selected,onSelect,backdrop.cached,policy.copy(blur=policy.blur&&sampledFrameReady),enabled,modifier,onOverlapChange)
+        if(sampledFrameReady&&policy.blur&&policy.motion&&Build.VERSION.SDK_INT>=33&&backdrop.upstream!=null&&enabled)
+            UpstreamLiquidDock(selected,onSelect,backdrop.upstream,modifier,onOverlapChange)
+        else Dock(selected,onSelect,backdrop.cached,policy.copy(blur=policy.blur&&sampledFrameReady),enabled,modifier,onOverlapChange)
     }
 }
 @Composable fun LiquidDock(selected:Int,onSelect:(Int)->Unit,source:GraphicsLayer,policy:GlassPolicy,modifier:Modifier) {

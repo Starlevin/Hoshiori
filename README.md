@@ -2,7 +2,7 @@
 
 Android 纯本地游戏签到工具，由手机直接访问社区服务；不依赖自建云服务器、Root或Shizuku。
 
-正式版下载：[GitHub Releases](https://github.com/Starlevin/Hoshiori/releases) · [夸克永久发布目录](https://pan.quark.cn/s/739482783865)（无提取码，按版本分类）。本分支为 **v0.7.7**，修复受理与成功混淆、重复授权检查、结果来源和 Dock 动态留白，见[本版交接与验收](docs/v077-report.md)及[根因审查](docs/v077-audit.md)，实际发布版本以下载通道为准。保留[上一版视觉与更新交接](docs/v076-report.md)、[森空岛续期与状态核对](docs/v075-report.md)及[15项验收矩阵与限制](docs/v070-report.md)，自动化通过不代表四社区实号或所有真机条件已通过。
+正式版下载：[GitHub Releases](https://github.com/Starlevin/Hoshiori/releases) · [夸克永久发布目录](https://pan.quark.cn/s/739482783865)（无提取码，按版本分类）。本分支为 **v0.7.8**，直接接入 Backdrop 上游液态标签栏，让图标文字与页面一起经过透镜处理，见[本版迁移与验收](docs/v078-report.md)。保留[v0.7.7 签到可靠性验收](docs/v077-report.md)及[根因审查](docs/v077-audit.md)、[视觉与更新交接](docs/v076-report.md)、[森空岛续期与状态核对](docs/v075-report.md)及[15项验收矩阵与限制](docs/v070-report.md)。实际发布版本以下载通道为准，自动化通过不代表四社区实号或所有真机条件已通过。
 
 ## 使用流程
 
@@ -29,11 +29,11 @@ Android 纯本地游戏签到工具，由手机直接访问社区服务；不依
 
 Jetpack Compose实现四页与独立悬浮Dock。选中胶囊使用弹性过渡；标准材质采样真实页面并局部模糊，文字图标单独绘制。API31以下、低内存、省电、触摸探索以及用户轻量/关闭设置使用回退。尊重系统减少动画与字号，支持深浅色、主色、动态色和字体设置。
 
-参考FlClash的交互组织，独立实现Android绘制；未复制其Dart、品牌素材或专有材质，不宣称与其视觉或Apple Liquid Glass完全等同。旧版主题映射见[参考记录](docs/frontend-flclash-20261102.md)。
+标准 Android13+ 动效模式直接使用 Apache-2.0 的 Backdrop 库与上游 catalog 标签栏组件；图标、文字及页面共同参与透镜合成。低版本或减少动效等条件保留回退。未复制 FlClash Dart 或 Nexio AGPL 应用代码，不宣称跨设备视觉完全相同。旧版主题映射见[参考记录](docs/frontend-flclash-20261102.md)。
 
 ## 构建与交接
 
-需要JDK17、Android SDK35。首次构建需要下载依赖。
+需要JDK17、Android SDK36（targetSdk仍为35）。首次构建需要下载依赖。
 
 ```shell
 cd android

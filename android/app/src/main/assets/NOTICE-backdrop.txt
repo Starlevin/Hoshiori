@@ -1,3 +1,17 @@
+Backdrop — current library/catalog integration and historical fallback
+v0.7.8 directly uses io.github.kyant0:backdrop:1.0.0, Copyright 2025 Kyant,
+Apache-2.0. Catalog LiquidBottomTabs/LiquidBottomTab and their gesture/highlight
+helpers are migrated from tag 1.0.0, commit
+eada9a8600142c1bd6a5c5fc143d06f599cdfaef.
+App changes: configurable theme colors and bar height, app navigation adapter,
+accessibility semantics and capability/reduced-motion fallback selection.
+Sources are under ui/upstream/ with individual attribution headers.
+No NexioSchedule application source is included.
+The upstream catalog's shape dependency is consumed unchanged:
+io.github.kyant0:capsule:2.1.1, Copyright Kyant, Apache License 2.0.
+
+The remainder records the historical v0.7.6 fallback implementation.
+
 Backdrop — Compose Multiplatform Liquid Glass effects
 https://github.com/Kyant0/AndroidLiquidGlass
 Pinned commit: 65ab177e90e5c1d8c62e70cf7755841982da65f6 (branch "kmp")
