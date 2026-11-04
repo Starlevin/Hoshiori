@@ -396,11 +396,11 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
 /**
  * Saveable form of [ScopeState]: 8 primitives, no Bundle class loading.
  * (`tab`, `detail`) must survive rotation the same way the baseline `rememberSaveable` locals did; the six
- * dialog flags are deliberately NOT restored (a dialog reopening over a recreated activity would fire its
- * callbacks against a half-restored screen -- baseline behaviour kept: they were `remember`).
+ * Destructive/action dialog flags are not restored. Appearance is a read-only draft until the user
+ * applies a setting, so keep that sheet open to restore its RGB draft across configuration changes.
  */
 private val ScopeStateSaver:Saver<ScopeState,Any> = listSaver(
-    save={v->listOf<Any?>(v.tab,v.detail,v.adding,v.renew,v.resultFilter,v.providerFilter,v.accountFilter,v.gameFilter)},
+    save={v->listOf<Any?>(v.tab,v.detail,v.adding,v.renew,v.resultFilter,v.providerFilter,v.accountFilter,v.gameFilter,v.appearance)},
     restore={r->ScopeState().apply{
         tab=r.getOrNull(0) as? Int ?: 0
         detail=r.getOrNull(1) as? String
@@ -410,6 +410,7 @@ private val ScopeStateSaver:Saver<ScopeState,Any> = listSaver(
         providerFilter=r.getOrNull(5) as? String ?: "all"
         accountFilter=r.getOrNull(6) as? String ?: "all"
         gameFilter=r.getOrNull(7) as? String ?: "all"
+        appearance=r.getOrNull(8) as? Boolean ?: false
     }},
 )
 

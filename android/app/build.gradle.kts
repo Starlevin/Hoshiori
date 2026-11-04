@@ -9,11 +9,11 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.glasssign.app"
+        applicationId = "com.glasssign.app.preview"
         minSdk = 26
         targetSdk = 35
-        versionCode = 18
-        versionName = "0.7.8"
+        versionCode = 19
+        versionName = "0.7.9-preview.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         resourceConfigurations += listOf("zh", "en")
     }

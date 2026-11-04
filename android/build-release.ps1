@@ -7,9 +7,9 @@ if (-not $SkipBuild) {
 }
 $apkDir = "$PSScriptRoot/app/build/outputs/apk/release"
 $metadata = Get-Content -Raw "$apkDir/output-metadata.json" | ConvertFrom-Json
-if ($metadata.applicationId -ne 'com.glasssign.app' -or $metadata.variantName -ne 'release') { throw 'Expected production Release APK.' }
+if ($metadata.applicationId -ne 'com.glasssign.app.preview' -or $metadata.variantName -ne 'release') { throw 'Expected isolated frontend preview Release APK.' }
 $version = $metadata.elements[0].versionName
-if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Expected final release version.' }
+if ($version -notmatch '^\d+\.\d+\.\d+-preview\.\d+$') { throw 'Expected a numbered preview version.' }
 if (-not $OutputDirectory) { $OutputDirectory = "$projectRoot/outputs/Hoshiori-v$version-release" }
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $apk = Join-Path $OutputDirectory "hoshiori-v$version-release.apk"

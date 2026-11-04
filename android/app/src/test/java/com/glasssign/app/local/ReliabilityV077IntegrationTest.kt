@@ -35,7 +35,9 @@ class ReliabilityV077IntegrationTest {
 
     @Before fun setup() {
         context=RuntimeEnvironment.getApplication()
-        databaseName="reliability-v077-${UUID.randomUUID()}.db"
+        // Keep the full UUID, but leave room for SQLite's -wal/-shm suffix on Windows test paths.
+        databaseName="${UUID.randomUUID()}.db"
+        println("SQLite fixture path length=${context.getDatabasePath(databaseName).absolutePath.length}")
         repo=SignRepository(context,databaseName)
     }
     @After fun cleanup() {repo.close();context.deleteDatabase(databaseName)}

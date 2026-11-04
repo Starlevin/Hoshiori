@@ -74,6 +74,26 @@ class ThemeContrastV070Test {
         }
     }
 
+    @Test fun oledContainersStayBlackAndSelectedTextRemainsReadableForExtremeSeeds() {
+        for(seed in listOf(0xFF000000.toInt(),0xFFFFFFFF.toInt(),0xFF00FF00.toInt()))for(style in styles) {
+            val c=appearanceScheme(AppearanceSettings(seed=seed,colorStyle=style,pureBlack=true),true,null)
+            for(surface in listOf(c.background,c.surface,c.surfaceVariant,c.primaryContainer,c.secondaryContainer,
+                c.surfaceContainerLowest,c.surfaceContainerLow,c.surfaceContainer,c.surfaceContainerHigh,c.surfaceContainerHighest))
+                assertEquals(Color.Black.toArgb(),surface.toArgb())
+            assertTrue(contrast(c.onPrimaryContainer,c.primaryContainer)>=aa)
+            assertTrue(contrast(c.onSecondaryContainer,c.secondaryContainer)>=aa)
+            assertTrue(contrast(c.primary,c.onPrimary)>=aa)
+        }
+    }
+
+    @Test fun oledPreferenceDoesNotBlackenTheLightTheme() {
+        val normal=appearanceScheme(AppearanceSettings(pureBlack=false),false,null)
+        val oled=appearanceScheme(AppearanceSettings(pureBlack=true),false,null)
+        assertEquals(normal.background.toArgb(),oled.background.toArgb())
+        assertEquals(normal.surface.toArgb(),oled.surface.toArgb())
+        assertEquals(normal.primaryContainer.toArgb(),oled.primaryContainer.toArgb())
+    }
+
     /**
      * Wallpaper (dynamic) palettes are the one input the 72-combination matrix cannot enumerate, and they
      * are the case where `surface` is tinted by a mid-luminance colour. Synthesised mid-tone palettes: the

@@ -1,8 +1,10 @@
 # 星栞 Hoshiori
 
+> 本分支为 **0.7.9-preview.1 前端预览**，使用独立包名 `com.glasssign.app.preview` 和应用名“星栞 · 前端预览”，以签名 Release 构建供并排比较。正式通道仍为 v0.7.8。预览包不读取正式包账号；不会将 `.debug` 或正式包的数据自动迁入。详见[前端对比与修复报告](docs/v079-preview-review.md)。
+
 Android 纯本地游戏签到工具，由手机直接访问社区服务；不依赖自建云服务器、Root或Shizuku。
 
-正式版下载：[GitHub Releases](https://github.com/Starlevin/Hoshiori/releases) · [夸克永久发布目录](https://pan.quark.cn/s/739482783865)（无提取码，按版本分类）。本分支为 **v0.7.8**，直接接入 Backdrop 上游液态标签栏，让图标文字与页面一起经过透镜处理，见[本版迁移与验收](docs/v078-report.md)。保留[v0.7.7 签到可靠性验收](docs/v077-report.md)及[根因审查](docs/v077-audit.md)、[视觉与更新交接](docs/v076-report.md)、[森空岛续期与状态核对](docs/v075-report.md)及[15项验收矩阵与限制](docs/v070-report.md)。实际发布版本以下载通道为准，自动化通过不代表四社区实号或所有真机条件已通过。
+正式版下载：[GitHub Releases](https://github.com/Starlevin/Hoshiori/releases) · [夸克永久发布目录](https://pan.quark.cn/s/739482783865)（无提取码，按版本分类）。本预览基于 **v0.7.8**，直接接入 Backdrop 上游液态标签栏，让图标文字与页面一起经过透镜处理，见[本版迁移与验收](docs/v078-report.md)。保留[v0.7.7 签到可靠性验收](docs/v077-report.md)及[根因审查](docs/v077-audit.md)、[视觉与更新交接](docs/v076-report.md)、[森空岛续期与状态核对](docs/v075-report.md)及[15项验收矩阵与限制](docs/v070-report.md)。实际发布版本以下载通道为准，自动化通过不代表四社区实号或所有真机条件已通过。
 
 ## 使用流程
 
