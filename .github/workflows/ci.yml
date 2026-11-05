@@ -25,7 +25,7 @@ jobs:
       - name: Build, unit tests and lint
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon --max-workers=2 :app:assembleRelease :app:testReleaseUnitTest :app:lintRelease
+          ./gradlew --no-daemon --max-workers=2 :app:assembleRelease :app:testReleaseUnitTest :app:lintRelease :app:assembleReleaseAndroidTest
       - uses: actions/upload-artifact@v4
         with:
           name: hoshiori-release-unsigned
