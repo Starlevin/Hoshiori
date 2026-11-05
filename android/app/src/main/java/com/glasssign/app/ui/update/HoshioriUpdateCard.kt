@@ -49,7 +49,7 @@ internal const val QUARK_NOT_PUBLISHED =
 
 /** 应用内直下不可用时的固定说法：不伪装成"正在下载"。 */
 internal const val EXTERNAL_ONLY_NOTE =
-    "应用内下载不可用时，只能打开外部渠道手动取回同一版本；外部页面不在星栞内，也不由星栞校验。"
+    "备用下载入口：网络受限时，可通过浏览器或夸克获取安装包。"
 
 /**
  * 「检查更新」 for 星栞, for the settings page. Self-contained: owns its ViewModel, its network call, its
@@ -107,6 +107,12 @@ fun HoshioriUpdateCard(modifier: Modifier = Modifier) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = modifier.testTag("$TAG-version"),
         )
+        state.meta.checkedAt?.let { time ->
+            val date=java.time.Instant.ofEpochMilli(time).atZone(java.time.ZoneId.systemDefault())
+                .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"))
+            Text("${if(state.meta.fromCache) "上次检查结果" else "检查时间"}：$date",
+                style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        }
 
         when (val result = state.result) {
             null -> Text(
@@ -408,8 +414,9 @@ private fun InstallationBasisNote(state: UpdateUiState) {
         UpdateReleaseChannel.PREVIEW -> NoteLine(
             icon = Icons.Rounded.Info,
             tint = MaterialTheme.colorScheme.tertiary,
-            text = "当前是预览安装版（${state.build.applicationId}）：只接受同一个预览包名、同一签名、版本更高的 APK；" +
-                "正式版是另一个独立应用，两者不能互相覆盖。",
+            text = if(state.legacyPreviewNeedsManualInstall)
+                "这是旧的独立预览包。新版使用正式包名，需手动安装一次，两边的数据不会自动合并。"
+            else "当前为预览通道，与正式版使用相同包名和签名，可覆盖更新并保留本机数据。",
         )
         UpdateReleaseChannel.OFFICIAL -> NoteLine(
             icon = Icons.Rounded.Info,

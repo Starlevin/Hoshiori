@@ -18,7 +18,7 @@ import org.json.JSONObject
 enum class UpdateChannel(val label: String, val description: String) {
     GITHUB(
         label = "GitHub",
-        description = "官方发布页，浏览器下载正式 APK，再由系统确认安装。",
+        description = "备用发布页，可在浏览器中手动下载安装包。",
     ),
     QUARK(
         label = "夸克",

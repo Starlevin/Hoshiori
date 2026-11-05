@@ -77,6 +77,8 @@ data class UpdateCheckMeta(
     val automatic: Boolean = false,
     /** 自动检查时判断这次要不要打扰用户的依据：有真正的新版本才提示。 */
     val shouldNotify: Boolean = false,
+    val checkedAt: Long? = null,
+    val fromCache: Boolean = false,
 )
 
 /**
@@ -224,9 +226,26 @@ class UpdateViewModel(
         val channel = current.releaseChannel ?: return false
         val memory = runCatching { checkStore.read() }.getOrDefault(UpdateCheckMemory())
         val decision = UpdateAutoCheck.decide(channel, memory, clock())
-        if (decision !is UpdateAutoCheckDecision.Check) return false
+        if (decision !is UpdateAutoCheckDecision.Check) {
+            restoreCachedResult(memory,channel)
+            return false
+        }
         runCheck(automatic = true, etag = decision.etag)
         return true
+    }
+
+    private fun restoreCachedResult(memory:UpdateCheckMemory,channel:UpdateReleaseChannel) {
+        val body=memory.cachedBody ?: return
+        if(memory.lastAttemptFailed||memory.cachedVersion!=build.versionName||
+            memory.cachedEndpoint!=UpdateReleaseService.endpointFor(channel))return
+        val cached=runCatching {
+            UpdateReleaseService(transport=UpdateTransport { _,_->UpdateHttpReply(body,memory.etag) },channel=channel)
+                .check(build.versionName)
+        }.getOrNull() ?: return
+        if(cached is UpdateCheck.Failed)return
+        _state.update { it.copy(result=cached,meta=UpdateCheckMeta(
+            automatic=true,shouldNotify=UpdateAutoCheck.shouldNotify(cached,memory.noticedVersion),
+            checkedAt=memory.lastCheckMs,fromCache=true)) }
     }
 
     /** 手动检查：永远可用，不受限频影响。一次只允许一个，防连点。 */
@@ -276,7 +295,7 @@ class UpdateViewModel(
                 it.copy(
                     busy = false,
                     result = run.outcome.check,
-                    meta = UpdateCheckMeta(automatic = automatic, shouldNotify = notify),
+                    meta = UpdateCheckMeta(automatic = automatic, shouldNotify = notify,checkedAt=clock()),
                     download = if (automatic) it.download else UpdateDownloadState.Idle,
                     downloadTarget = null,
                 )
