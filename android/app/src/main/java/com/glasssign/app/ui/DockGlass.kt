@@ -12,7 +12,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
 import androidx.compose.foundation.gestures.horizontalDrag
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -35,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -55,6 +57,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -70,6 +73,7 @@ import dev.chrisbanes.haze.glass.hazeGlassContainer
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private val DockTitles = listOf("首页", "账号", "记录", "设置")
 private val DockIcons = listOf(HoshioriIcons.Home, HoshioriIcons.Accounts, HoshioriIcons.Records, HoshioriIcons.Settings)
@@ -108,6 +112,9 @@ internal fun DockGlass(
     var reboundTarget by remember { mutableStateOf<Int?>(null) }
     var settleJob by remember { mutableStateOf<Job?>(null) }
     val pressSignals = remember { MutableInteractionSource() }
+    val pressing by pressSignals.collectIsPressedAsState()
+    val pressed = full && motion && pressing
+    val pressScale = animateFloatAsState(if (pressed) .98f else 1f, movement, label = "glass-press-size")
     val currentSelect by rememberUpdatedState(onSelect)
     val currentSelected by rememberUpdatedState(selected)
 
@@ -164,7 +171,7 @@ internal fun DockGlass(
                 }.size(lensWidth, lensHeight)
 
             if (full) {
-                val material = rememberDockGlassStyle(lens = true)
+                val material = rememberDockGlassStyle(lens = true, pressed = pressed)
                 val baseMaterial = rememberDockGlassStyle(lens = false)
                 val press = pressSignals.takeIf { motion }
                 val hasCompanion = combine && (draggedSlot != null || reboundTarget != null)
@@ -175,13 +182,13 @@ internal fun DockGlass(
                     ),
                 ) {
                     Box(
-                        lensOffset(travelling = !combine, lift = false).testTag("selected-capsule")
+                        lensOffset(travelling = !combine, lift = false).glassPressSize(pressScale).testTag("selected-capsule")
                             .hazeGlass(input, material, HazePerformanceMode.Default, interactionSource = press,
                                 memberTransition = GlassMemberTransition.None),
                     )
                     if (hasCompanion) {
                         Box(
-                            lensOffset(travelling = true, lift = true).testTag("waterdrop-follower")
+                            lensOffset(travelling = true, lift = true).glassPressSize(pressScale).testTag("waterdrop-follower")
                                 .hazeGlass(input, material, HazePerformanceMode.Default, interactionSource = press,
                                     memberTransition = GlassMemberTransition.None),
                         )
@@ -199,7 +206,7 @@ internal fun DockGlass(
 
             Row(
                 dockBase.padding(horizontal = TrackPadding).dockDrag(
-                    motion, selected, cellPx, rtl, pressSignals,
+                    motion, selected, cellPx, rtl,
                     onStart = { resetDrag() },
                     onMove = { draggedSlot = it },
                     onEnd = { settle(it) },
@@ -212,7 +219,7 @@ internal fun DockGlass(
                         Modifier.weight(1f).fillMaxHeight().testTag("nav-$index")
                             .selectable(
                                 selected = isSelected,
-                                interactionSource = null,
+                                interactionSource = pressSignals,
                                 indication = null,
                                 role = Role.Tab,
                                 onClick = {
@@ -233,12 +240,12 @@ internal fun DockGlass(
 }
 
 @Composable
-private fun rememberDockGlassStyle(lens: Boolean): GlassStyle {
+private fun rememberDockGlassStyle(lens: Boolean, pressed: Boolean = false): GlassStyle {
     val scheme = MaterialTheme.colorScheme
     val dark = scheme.background.luminance() < .5f
     val navTint = LocalAppearance.current.navigationTint
     val tone = if (navTint) scheme.surfaceContainerHigh else scheme.surface
-    return remember(dark, lens, tone) {
+    return remember(dark, lens, tone, pressed) {
         val base = if (lens) GlassStyle.clear else GlassStyle.regular
         base.then {
             shape(if (lens) LensShape else ShellShape)
@@ -260,14 +267,25 @@ private fun rememberDockGlassStyle(lens: Boolean): GlassStyle {
             tint(tone.copy(alpha = tintAlpha))
             if (lens && !dark) whitePoint(.39f)
             ambientResponse(if (lens) .21f else .17f)
-            specularIntensity(if (lens) .68f else .48f)
+            specularIntensity(if (!lens) .48f else if (pressed) .84f else .68f)
             edgeSoftness(1.dp)
             if (lens) pressed {
-                scale(.98f)
                 refractionMultiplier(1.12f)
                 lightingIntensity(.82f)
             }
         }
+    }
+}
+
+/** Preserve the hit area and update the real lens bounds that the fusion container reads. */
+private fun Modifier.glassPressSize(scale: State<Float>) = layout { measurable, constraints ->
+    val width = constraints.maxWidth
+    val height = constraints.maxHeight
+    val lensWidth = (width * scale.value).roundToInt().coerceIn(0, width)
+    val lensHeight = (height * scale.value).roundToInt().coerceIn(0, height)
+    val lens = measurable.measure(Constraints.fixed(lensWidth, lensHeight))
+    layout(width, height) {
+        lens.placeRelative((width - lensWidth) / 2, (height - lensHeight) / 2)
     }
 }
 
@@ -277,7 +295,6 @@ private fun Modifier.dockDrag(
     selected: Int,
     cellPx: Float,
     rtl: Boolean,
-    pressSignals: MutableInteractionSource,
     onStart: () -> Unit,
     onMove: (Float) -> Unit,
     onEnd: (Int) -> Unit,
@@ -285,30 +302,25 @@ private fun Modifier.dockDrag(
     val start by rememberUpdatedState(onStart)
     val move by rememberUpdatedState(onMove)
     val end by rememberUpdatedState(onEnd)
-    return pointerInput(enabled, selected, cellPx, rtl) {
+    val selection by rememberUpdatedState(selected)
+    return pointerInput(enabled, cellPx, rtl) {
         if (!enabled || cellPx <= 0f) return@pointerInput
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
-            val press = PressInteraction.Press(down.position.copy(x = cellPx / 2))
-            pressSignals.tryEmit(press)
-            var complete = false
-            try {
-                val drag = awaitHorizontalTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
-                if (drag != null) {
-                    start()
-                    fun position(x: Float) =
-                        waterDropTravelCells(selected, (x - down.position.x) / cellPx * if (rtl) -1f else 1f)
-                    var last = position(drag.position.x)
+            val origin = selection
+            val drag = awaitHorizontalTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
+            if (drag != null) {
+                start()
+                fun position(x: Float) =
+                    waterDropTravelCells(origin, (x - down.position.x) / cellPx * if (rtl) -1f else 1f)
+                var last = position(drag.position.x)
+                move(last)
+                val complete = horizontalDrag(drag.id) { change ->
+                    last = position(change.position.x)
                     move(last)
-                    complete = horizontalDrag(drag.id) { change ->
-                        last = position(change.position.x)
-                        move(last)
-                        change.consume()
-                    }
-                    end(if (complete) waterDropRestSlot(last) else selected)
+                    change.consume()
                 }
-            } finally {
-                pressSignals.tryEmit(if (complete) PressInteraction.Release(press) else PressInteraction.Cancel(press))
+                end(if (complete) waterDropRestSlot(last) else selection)
             }
         }
     }
