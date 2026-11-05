@@ -3,6 +3,10 @@ package com.glasssign.app.ui.update
 import androidx.activity.compose.setContent
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -22,7 +26,9 @@ class UpdateButtonDeviceTest {
         var clicks=0
         rule.activityRule.scenario.onActivity { activity -> activity.setContent {
             GlassSignTheme(false) {
-                PrimaryButton("下载安装包",Icons.Rounded.Download,"download-area"){clicks++}
+                Box(Modifier.padding(top=64.dp)) {
+                    PrimaryButton("下载安装包",Icons.Rounded.Download,"download-area"){clicks++}
+                }
             }
         } }
         rule.onNodeWithText("下载安装包").performClick()
