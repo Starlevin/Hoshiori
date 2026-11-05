@@ -22,15 +22,18 @@ internal fun dockRendering(
     reduceTransparency: Boolean,
     highContrast: Boolean,
     policy: GlassPolicy,
-): DockRendering = when {
-    requested == GlassQuality.OFF -> DockRendering(GlassQuality.OFF, policy.motion)
-    reduceTransparency -> DockRendering(GlassQuality.OFF, policy.motion, "已减少透明效果")
-    highContrast || policy.opaqueForAccessibility -> DockRendering(GlassQuality.OFF, policy.motion, "系统辅助功能要求清晰对比")
-    requested == GlassQuality.LITE -> DockRendering(GlassQuality.LITE, policy.motion)
-    api < 33 -> DockRendering(GlassQuality.LITE, policy.motion, "完整折射需要 Android 13")
-    !accelerated -> DockRendering(GlassQuality.LITE, policy.motion, "当前窗口没有硬件加速")
-    !policy.blur -> DockRendering(GlassQuality.LITE, policy.motion, policy.reason)
-    else -> DockRendering(GlassQuality.FULL, policy.motion)
+): DockRendering {
+    val motion = policy.motion && !policy.opaqueForAccessibility
+    return when {
+        requested == GlassQuality.OFF -> DockRendering(GlassQuality.OFF, motion)
+        reduceTransparency -> DockRendering(GlassQuality.OFF, motion, "已减少透明效果")
+        highContrast || policy.opaqueForAccessibility -> DockRendering(GlassQuality.OFF, motion, "系统辅助功能要求清晰对比")
+        requested == GlassQuality.LITE -> DockRendering(GlassQuality.LITE, motion)
+        api < 33 -> DockRendering(GlassQuality.LITE, motion, "完整折射需要 Android 13")
+        !accelerated -> DockRendering(GlassQuality.LITE, motion, "当前窗口没有硬件加速")
+        !policy.blur -> DockRendering(GlassQuality.LITE, motion, policy.reason)
+        else -> DockRendering(GlassQuality.FULL, motion)
+    }
 }
 
 @Composable

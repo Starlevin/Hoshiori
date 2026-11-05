@@ -26,6 +26,8 @@ class DockGlassPolicyTest {
         assertEquals(GlassQuality.OFF, dockRendering(GlassQuality.FULL, 36, true, true, false, available).mode)
         assertEquals(GlassQuality.OFF, dockRendering(GlassQuality.LITE, 36, true, false, true, available).mode)
         val accessibility = available.copy(opaqueForAccessibility = true)
-        assertEquals(GlassQuality.OFF, dockRendering(GlassQuality.FULL, 36, true, false, false, accessibility).mode)
+        val accessible = dockRendering(GlassQuality.FULL, 36, true, false, false, accessibility)
+        assertEquals(GlassQuality.OFF, accessible.mode)
+        assertFalse(accessible.motion)
     }
 }
