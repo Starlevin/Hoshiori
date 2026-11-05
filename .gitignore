@@ -4,6 +4,7 @@
 !/README.md
 !/LICENSE
 !/THIRD_PARTY_NOTICES.md
+!/DATA_HANDLING.md
 !/android/
 !/docs/
 !/.github/
@@ -46,3 +47,5 @@
 !/docs/v078-report.md
 !/docs/v079-preview-review.md
 !/docs/v079-preview2-design.md
+!/docs/legal-and-oss-review-20261105.md
+!/docs/redemption-feasibility-20261105.md

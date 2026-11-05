@@ -4,6 +4,10 @@
 
 Android 纯本地游戏签到工具，由手机直接访问社区服务；不依赖自建云服务器、Root或Shizuku。
 
+本项目为独立第三方工具，游戏及社区名称用于说明兼容范围，不表示获得运营方认可、合作或担保。维护者有权授权的自有代码采用 [MIT](LICENSE)，第三方代码与数据继续遵守[各自许可及声明](THIRD_PARTY_NOTICES.md)。开源许可不授予游戏平台接口使用权或第三方商标权。
+
+[数据与权限实况](DATA_HANDLING.md)包含升级检查点及提交保护的实际保留范围，当前还不是完成运营主体、私密联络及全部保存期限整改后的正式隐私政策。[法律与开源初审](docs/legal-and-oss-review-20261105.md)列出未解决事项；[礼包码可行性调研](docs/redemption-feasibility-20261105.md)区分已证实的官方入口与尚未验证的自动兑换能力。
+
 正式版下载：[GitHub Releases](https://github.com/Starlevin/Hoshiori/releases) · [夸克永久发布目录](https://pan.quark.cn/s/739482783865)（无提取码，按版本分类）。本预览基于 **v0.7.8**，直接接入 Backdrop 上游液态标签栏，让图标文字与页面一起经过透镜处理，见[本版迁移与验收](docs/v078-report.md)。保留[v0.7.7 签到可靠性验收](docs/v077-report.md)及[根因审查](docs/v077-audit.md)、[视觉与更新交接](docs/v076-report.md)、[森空岛续期与状态核对](docs/v075-report.md)及[15项验收矩阵与限制](docs/v070-report.md)。实际发布版本以下载通道为准，自动化通过不代表四社区实号或所有真机条件已通过。
 
 ## 使用流程

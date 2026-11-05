@@ -27,3 +27,14 @@ CI 只生成 unsigned Release 构建验证产物，文件名明确为未签名�
 已有正式版只能由相同包名和证书覆盖更新，系统保留本机数据，应用执行既有数据库迁移。`.debug` 测试包与正式包是独立 Android 应用，不能自动共享其 Keystore 授权数据；保留测试版，不应卸载清数据来强行升级。
 
 夸克永久表示创建时设置无到期时间；实际可用性仍受网盘服务、审核、账号状态与文件保留情况影响。
+# 补充：许可与源码一致性（2026-11-05）
+
+新发行应按实际运行依赖核对许可、版权及必要 NOTICE，不能只看根 LICENSE。检查 APK 内的 `assets/NOTICE-*`、`assets/licenses/*` 与源码一致，同时保留依赖自身的数据许可声明，例如 OkHttp 的 Public Suffix List / MPL-2.0。自有 MIT 全文和第三方声明应作为分发材料提供；应用内统一查看入口仍需补充。
+
+从明确的发行提交导出跨平台源码时，避免 Windows 自动转换行尾：
+
+```shell
+git -c core.autocrlf=false -c core.eol=lf archive --format=zip --prefix=Hoshiori/ --output=source-lf.zip <release-commit>
+```
+
+解压后核对文件集合与 Git blob 内容，记录实际提交、包体摘要与许可文件摘要。已发布产物保留，后续纠正或补充使用不同文件名和单独校验表。检查点/提交保护的真实保留范围按 DATA_HANDLING.md 说明，不能用“升级保留数据”掩盖删除副本未清理的问题。
