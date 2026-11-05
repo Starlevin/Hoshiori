@@ -14,46 +14,22 @@
  * limitations under the License.
  *
  * ============================================================================
- * VERBATIM MIGRATION — Hoshiori / GlassSign
- * ============================================================================
- * Upstream  : Kyant0/AndroidLiquidGlass
- * Tag       : 1.0.0
- * Commit    : eada9a8600142c1bd6a5c5fc143d06f599cdfaef
- * Source    : https://github.com/Kyant0/AndroidLiquidGlass/blob/eada9a8600142c1bd6a5c5fc143d06f599cdfaef/catalog/src/main/java/com/kyant/backdrop/catalog/utils/DampedDragAnimation.kt
- * License   : Apache License 2.0 (see the header above and THIRD_PARTY_NOTICES.md)
- *
- * CHANGES FROM UPSTREAM: NONE.
- * Byte-for-byte upstream except for this comment block; package deliberately
- * kept as `com.kyant.backdrop.catalog.utils`.
- *
- * Why this file matters for the migration (do not simplify it away):
- *  - `press()` / `release()` animate `pressProgress`, `scaleX`, `scaleY` from
- *    the SAME spring that `LiquidBottomTabs` reads for `lens()` amounts and for
- *    `LocalLiquidBottomTabScale`. That shared source is what makes the icon and
- *    the text grow *with* the refraction instead of independently of it.
- *  - `updateValue` drives the capsule during the drag; `animateToValue` runs the
- *    settle spring. `velocity` feeds the capsule's squash/stretch in
- *    `layerBlock`, so the liquid feel comes from here, not from the shader.
- *  - The `modifier` installs `inspectDragGestures`; it is attached once in
- *    LiquidBottomTabs on the capsule Box.
+ * Modified from Kyant0/AndroidLiquidGlass, tag 1.0.0, commit
+ * eada9a8600142c1bd6a5c5fc143d06f599cdfaef.
+ * Source: catalog/src/main/java/com/kyant/backdrop/catalog/utils/DampedDragAnimation.kt
+ * Hoshiori changes: synchronous drag position, cancellable settling and pressure
+ * jobs. Pointer movement bypasses the spring; release keeps the upstream optics.
  */
 package com.kyant.backdrop.catalog.utils
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.MutatorMutex
-import androidx.compose.runtime.snapshotFlow
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.util.VelocityTracker
-import androidx.compose.ui.unit.IntSize
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.android.awaitFrame
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlin.math.abs
 
 class DampedDragAnimation(
     private val animationScope: CoroutineScope,
@@ -62,13 +38,10 @@ class DampedDragAnimation(
     val visibilityThreshold: Float,
     val initialScale: Float,
     val pressedScale: Float,
-    val onDragStarted: DampedDragAnimation.(position: Offset) -> Unit,
-    val onDragStopped: DampedDragAnimation.() -> Unit,
-    val onDrag: DampedDragAnimation.(size: IntSize, dragAmount: Offset) -> Unit,
 ) {
 
     private val valueAnimationSpec =
-        spring(1f, 1000f, visibilityThreshold)
+        spring(.82f, 650f, visibilityThreshold)
     private val velocityAnimationSpec =
         spring(0.5f, 300f, visibilityThreshold * 10f)
     private val pressProgressAnimationSpec =
@@ -89,40 +62,31 @@ class DampedDragAnimation(
     private val scaleYAnimation =
         Animatable(initialScale, 0.001f)
 
-    private val mutatorMutex = MutatorMutex()
-
-    private val velocityTracker = VelocityTracker()
-
-    val value: Float get() = valueAnimation.value
+    private var directValue: Float? by mutableStateOf(null)
+    private var directVelocity: Float by mutableStateOf(0f)
+    private var lastDragNanos = 0L
+    private var settleJob: Job? = null
+    private var pressureJob: Job? = null
+    val value: Float get() = directValue ?: valueAnimation.value
     val progress: Float get() = (value - valueRange.start) / (valueRange.endInclusive - valueRange.start)
-    val targetValue: Float get() = valueAnimation.targetValue
+    val targetValue: Float get() = directValue ?: valueAnimation.targetValue
     val pressProgress: Float get() = pressProgressAnimation.value
     val scaleX: Float get() = scaleXAnimation.value
     val scaleY: Float get() = scaleYAnimation.value
-    val velocity: Float get() = velocityAnimation.value
+    val velocity: Float get() = if(directValue != null) directVelocity else velocityAnimation.value
 
-    val modifier: Modifier = Modifier.pointerInput(Unit) {
-        inspectDragGestures(
-            onDragStart = { down ->
-                onDragStarted(down.position)
-                press()
-            },
-            onDragEnd = {
-                onDragStopped()
-                release()
-            },
-            onDragCancel = {
-                onDragStopped()
-                release()
-            }
-        ) { change, dragAmount ->
-            onDrag(size, dragAmount)
-        }
+    fun beginDrag() {
+        val shown = value
+        settleJob?.cancel()
+        directValue = shown
+        directVelocity = 0f
+        lastDragNanos = System.nanoTime()
+        press()
     }
 
     fun press() {
-        velocityTracker.resetTracking()
-        animationScope.launch {
+        pressureJob?.cancel()
+        pressureJob = animationScope.launch {
             launch { pressProgressAnimation.animateTo(1f, pressProgressAnimationSpec) }
             launch { scaleXAnimation.animateTo(pressedScale, scaleXAnimationSpec) }
             launch { scaleYAnimation.animateTo(pressedScale, scaleYAnimationSpec) }
@@ -130,14 +94,8 @@ class DampedDragAnimation(
     }
 
     fun release() {
-        animationScope.launch {
-            awaitFrame()
-            if (value != targetValue) {
-                val threshold = (valueRange.endInclusive - valueRange.start) * 0.025f
-                snapshotFlow { valueAnimation.value }
-                    .filter { abs(it - valueAnimation.targetValue) < threshold }
-                    .first()
-            }
+        pressureJob?.cancel()
+        pressureJob = animationScope.launch {
             launch { pressProgressAnimation.animateTo(0f, pressProgressAnimationSpec) }
             launch { scaleXAnimation.animateTo(initialScale, scaleXAnimationSpec) }
             launch { scaleYAnimation.animateTo(initialScale, scaleYAnimationSpec) }
@@ -145,32 +103,28 @@ class DampedDragAnimation(
     }
 
     fun updateValue(value: Float) {
-        val targetValue = value.coerceIn(valueRange)
-        animationScope.launch {
-            launch { valueAnimation.animateTo(targetValue, valueAnimationSpec) { updateVelocity() } }
-        }
+        val next = value.coerceIn(valueRange)
+        val now = System.nanoTime()
+        val dt = ((now-lastDragNanos)/1_000_000_000f).coerceIn(.008f,.05f)
+        val speed = (next-this.value)/dt/(valueRange.endInclusive-valueRange.start).coerceAtLeast(1f)
+        directVelocity = (directVelocity*.65f+speed*.35f).coerceIn(-5f,5f)
+        directValue = next
+        lastDragNanos = now
     }
 
     fun animateToValue(value: Float) {
-        animationScope.launch {
-            mutatorMutex.mutate {
-                press()
-                val targetValue = value.coerceIn(valueRange)
-                launch { valueAnimation.animateTo(targetValue, valueAnimationSpec) }
-                if (velocity != 0f) {
-                    launch { velocityAnimation.animateTo(0f, velocityAnimationSpec) }
-                }
-                release()
-            }
+        val from = this.value
+        val speed = velocity
+        settleJob?.cancel()
+        settleJob = animationScope.launch {
+            valueAnimation.snapTo(from)
+            velocityAnimation.snapTo(speed)
+            directValue = null
+            press()
+            launch { velocityAnimation.animateTo(0f, velocityAnimationSpec) }
+            valueAnimation.animateTo(value.coerceIn(valueRange), valueAnimationSpec)
+            release()
         }
     }
 
-    private fun updateVelocity() {
-        velocityTracker.addPosition(
-            System.currentTimeMillis(),
-            Offset(value, 0f)
-        )
-        val targetVelocity = velocityTracker.calculateVelocity().x / (valueRange.endInclusive - valueRange.start)
-        animationScope.launch { velocityAnimation.animateTo(targetVelocity, velocityAnimationSpec) }
-    }
 }

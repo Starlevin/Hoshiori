@@ -11,6 +11,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.catalog.components.LiquidBottomTab
@@ -48,8 +49,8 @@ internal fun UpstreamLiquidDock(selected:Int,onSelect:(Int)->Unit,backdrop:Backd
                     stateDescription=if(selected==index)"已选中" else "未选中"
                     this.selected=selected==index
                 }) {
-                    Icon(icons[index],null,Modifier.size(23.dp),tint=colors.onSurfaceVariant)
-                    Text(label,style=MaterialTheme.typography.labelMedium,color=colors.onSurfaceVariant,maxLines=1)
+                    Icon(icons[index],null,Modifier.size(22.dp),tint=colors.onSurfaceVariant)
+                    Text(label,style=MaterialTheme.typography.labelMedium.copy(fontSize=11.sp),color=colors.onSurfaceVariant,maxLines=1)
                 }
             }
         }

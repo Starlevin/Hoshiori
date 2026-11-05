@@ -22,48 +22,18 @@
  * Source    : https://github.com/Kyant0/AndroidLiquidGlass/blob/eada9a8600142c1bd6a5c5fc143d06f599cdfaef/catalog/src/main/java/com/kyant/backdrop/catalog/components/LiquidBottomTabs.kt
  * License   : Apache License 2.0 (see the header above and THIRD_PARTY_NOTICES.md)
  *
- * ---------------------------------------------------------------------------
- * CHANGES FROM UPSTREAM (this file is the ONLY modified one)
- * ---------------------------------------------------------------------------
- * The complete render/press/drag pipeline is untouched. Every visual mechanism
- * below is upstream's, byte-for-byte:
- *   - the visible `Row` + `.drawBackdrop(shape = ContinuousCapsule,
- *     effects = { vibrancy(); blur(8.dp); lens(24.dp, 24.dp) })` panel;
- *   - the alpha-0 content `Row` that both feeds `tabsBackdrop` (icon + label
- *     capture) and draws the press `Highlight`;
- *   - the sliding capsule `Box` over `rememberCombinedBackdrop(backdrop,
- *     tabsBackdrop)` with `lens(10.dp, 14.dp, chromaticAberration = true)`,
- *     `Shadow`, `InnerShadow`, and the `BlendMode.Clear` punch-through;
- *   - `DampedDragAnimation` springs, `InteractiveHighlight`, and
- *     `LocalLiquidBottomTabScale` (icons and labels grow with the same
- *     `pressProgress` as the lens — they are never scaled by hand).
- *
- * Only these additions were made, all optional with upstream-default values:
- *   [1] `barHeight: Dp = 64.dp` — outer panel height. The contents row is
- *       derived as `barHeight - 8.dp` exactly as upstream's 64/56 pair, so the
- *       icon/label block keeps its proportions and is NOT stretched.
- *   [2] `isLightTheme: Boolean = !isSystemInDarkTheme()` — upstream computed
- *       this internally; hoisted so the app can follow MaterialTheme instead of
- *       the system, without touching either branch's default.
- *   [3] `accentColor: Color` / [4] `containerColor: Color` — upstream literals
- *       hoisted into parameters that default to the *same* literals.
- *   All four sit after `modifier` and before `content`, per the integration
- *   contract. `containerColor` uses a default-value lambda so the "follow
- *   isLightTheme" behaviour is preserved when the caller omits it; pass it
- *   explicitly to decouple the two.
- *
- * Explicitly NOT added: `motionEnabled`. Reduced-motion is handled by the app
- * choosing its own fallback path, so no second animation code path exists here.
- *
- * Two upstream comments are preserved because they document real behaviour
- * (`layerBlock` scaling, `BlendMode.Clear`); nothing was hand-replaced with a
- * different effect.
+ * CHANGES FROM UPSTREAM — Hoshiori
+ * Configurable theme/height, compact lens inset, full-bar horizontal gestures,
+ * direct pointer tracking and cancellation without a page change. The combined
+ * backdrop, refraction, shadows and continuous capsule rendering are retained.
  */
 package com.kyant.backdrop.catalog.components
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseOut
-import androidx.compose.animation.core.spring
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -72,12 +42,14 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -90,6 +62,8 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -115,18 +89,11 @@ import com.kyant.backdrop.shadow.Shadow
 import com.kyant.capsule.ContinuousCapsule
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.drop
-import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.sign
 
-/**
- * Upstream `64.dp` panel height, kept as the reference so the content height can
- * be derived as `barHeight - 8.dp` for any [barHeight].
- */
+/** Reference height; the app supplies its font-aware compact height. */
 private val UpstreamBarHeight = 64.dp
-
-/** Upstream `56.dp` content height; the vertical padding is the 8.dp delta. */
-private val UpstreamContentHeight = 56.dp
 
 /** Upstream `AccentLight` / `AccentDark`. */
 private val UpstreamAccentLight = Color(0xFF0088FF)
@@ -149,11 +116,8 @@ fun LiquidBottomTabs(
     containerColor: Color = if (isLightTheme) UpstreamContainerLight else UpstreamContainerDark,
     content: @Composable RowScope.() -> Unit
 ) {
-    // [CHANGE 1] Content row height is derived, not a second knob: upstream's
-    // 64->56 pair is a fixed 8.dp of vertical padding, so keeping that delta
-    // means the icon + label block keeps its size relative to the capsule and is
-    // never stretched by a taller bar (the 200%-font case).
-    val contentHeight = (barHeight - (UpstreamBarHeight - UpstreamContentHeight)).coerceAtLeast(0.dp)
+    // Keep a 6.dp inset around the lens and at least a 48.dp tall tab target.
+    val contentHeight = (barHeight - 12.dp).coerceAtLeast(48.dp)
 
     val tabsBackdrop = rememberLayerBackdrop()
 
@@ -178,55 +142,44 @@ fun LiquidBottomTabs(
 
         val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
         val animationScope = rememberCoroutineScope()
-        var currentIndex by remember(selectedTabIndex) {
-            mutableIntStateOf(selectedTabIndex())
-        }
-        // Upstream pressedScale is the fixed 78/56 ratio; it is a capsule *scale*
-        // on the lens, not a height, so it stays independent of barHeight.
+        val selectedNow by rememberUpdatedState(selectedTabIndex)
+        val commitNow by rememberUpdatedState(onTabSelected)
+        var dragging by remember { mutableStateOf(false) }
         val dampedDragAnimation = remember(animationScope) {
             DampedDragAnimation(
-                animationScope = animationScope,
-                initialValue = selectedTabIndex().toFloat(),
-                valueRange = 0f..(tabsCount - 1).toFloat(),
-                visibilityThreshold = 0.001f,
-                initialScale = 1f,
-                pressedScale = 78f / 56f,
-                onDragStarted = {},
-                onDragStopped = {
-                    val targetIndex = targetValue.fastRoundToInt().fastCoerceIn(0, tabsCount - 1)
-                    currentIndex = targetIndex
-                    animateToValue(targetIndex.toFloat())
-                    animationScope.launch {
-                        offsetAnimation.animateTo(
-                            0f,
-                            spring(1f, 300f, 0.5f)
-                        )
-                    }
-                },
-                onDrag = { _, dragAmount ->
-                    updateValue(
-                        (targetValue + dragAmount.x / tabWidth * if (isLtr) 1f else -1f)
-                            .fastCoerceIn(0f, (tabsCount - 1).toFloat())
-                    )
-                    animationScope.launch {
-                        offsetAnimation.snapTo(offsetAnimation.value + dragAmount.x)
-                    }
-                }
+                animationScope, selectedTabIndex().toFloat(), 0f..(tabsCount-1).toFloat(),
+                .001f, 1f, 1.18f
             )
         }
         LaunchedEffect(selectedTabIndex) {
-            snapshotFlow { selectedTabIndex() }
-                .collectLatest { index ->
-                    currentIndex = index
-                }
-        }
-        LaunchedEffect(dampedDragAnimation) {
-            snapshotFlow { currentIndex }
-                .drop(1)
-                .collectLatest { index ->
+            snapshotFlow { selectedTabIndex() }.drop(1).collectLatest { index ->
+                if (!dragging && dampedDragAnimation.targetValue != index.toFloat())
                     dampedDragAnimation.animateToValue(index.toFloat())
-                    onTabSelected(index)
-                }
+            }
+        }
+        val dragModifier = Modifier.pointerInput(tabWidth, isLtr) {
+            fun follow(x: Float) {
+                val logicalX = if (isLtr) x else size.width - x
+                dampedDragAnimation.updateValue((logicalX - 4.dp.toPx()) / tabWidth - .5f)
+            }
+            detectHorizontalDragGestures(
+                onDragStart = { point ->
+                    dragging = true
+                    dampedDragAnimation.beginDrag()
+                    follow(point.x)
+                },
+                onDragEnd = {
+                    val index = dampedDragAnimation.targetValue.fastRoundToInt().fastCoerceIn(0,tabsCount-1)
+                    dragging = false
+                    dampedDragAnimation.animateToValue(index.toFloat())
+                    if(index != selectedNow()) commitNow(index)
+                },
+                onDragCancel = {
+                    dragging = false
+                    dampedDragAnimation.animateToValue(selectedNow().toFloat())
+                },
+                onHorizontalDrag = { change, _ -> change.consume(); follow(change.position.x) }
+            )
         }
 
         val interactiveHighlight = remember(animationScope) {
@@ -242,6 +195,18 @@ fun LiquidBottomTabs(
             )
         }
 
+        val pressureModifier = Modifier.pointerInput(dampedDragAnimation) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                dampedDragAnimation.press()
+                do {
+                    val event = awaitPointerEvent(PointerEventPass.Final)
+                } while (event.changes.any { it.pressed })
+                dampedDragAnimation.release()
+            }
+        }
+        Box(Modifier.fillMaxWidth().height(barHeight).then(pressureModifier).then(dragModifier),
+            contentAlignment = Alignment.CenterStart) {
         Row(
             Modifier
                 .graphicsLayer {
@@ -267,14 +232,14 @@ fun LiquidBottomTabs(
                 // [CHANGE 2] was `.height(64f.dp)`.
                 .height(barHeight)
                 .fillMaxWidth()
-                .padding(4f.dp),
+                .padding(horizontal = 4.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             content = content
         )
 
         CompositionLocalProvider(
             LocalLiquidBottomTabScale provides {
-                lerp(1f, 1.2f, dampedDragAnimation.pressProgress)
+                lerp(1f, 1.10f, dampedDragAnimation.pressProgress)
             }
         ) {
             Row(
@@ -304,7 +269,7 @@ fun LiquidBottomTabs(
                         onDrawSurface = { drawRect(containerColor) }
                     )
                     .then(interactiveHighlight.modifier)
-                    // [CHANGE 3] was `.height(56f.dp)`, kept as barHeight - 8.dp.
+                    // Capture the same inset content that the lens selects.
                     .height(contentHeight)
                     .fillMaxWidth()
                     .padding(horizontal = 4f.dp)
@@ -323,7 +288,6 @@ fun LiquidBottomTabs(
                         else size.width - (dampedDragAnimation.value + 1f) * tabWidth + panelOffset
                 }
                 .then(interactiveHighlight.gestureModifier)
-                .then(dampedDragAnimation.modifier)
                 .drawBackdrop(
                     backdrop = rememberCombinedBackdrop(backdrop, tabsBackdrop),
                     shape = { ContinuousCapsule },
@@ -370,10 +334,10 @@ fun LiquidBottomTabs(
                         drawRect(Color.Black.copy(alpha = 0.03f * progress))
                     }
                 )
-                // [CHANGE 4] was `.height(56f.dp)`, kept as barHeight - 8.dp so the
-                // sliding capsule always matches the content row it selects.
+                // Match both the padded row cell width and content height.
                 .height(contentHeight)
-                .fillMaxWidth(1f / tabsCount)
+                .width(with(density) { tabWidth.toDp() })
         )
+        }
     }
 }

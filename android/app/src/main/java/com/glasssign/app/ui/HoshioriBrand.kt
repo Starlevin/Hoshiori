@@ -46,60 +46,85 @@ object HoshioriIcons {
 
     // ---- Primary navigation ----------------------------------------------------------------
 
-    /** One rounded house silhouette (roof and walls drawn as a single closed path, so there is no
-     *  duplicated roof line) with a round-topped door. Mirrored about x = 12. */
+    /** Home: rounded roof, round-footed body, single arched door. */
     val Home=glyph("Hoshiori.Home") {
-        moveTo(12f,3.75f);lineTo(19.75f,10.25f);verticalLineTo(19f)
-        curveTo(19.75f,20.1f,18.85f,21f,17.75f,21f);horizontalLineTo(6.25f)
-        curveTo(5.15f,21f,4.25f,20.1f,4.25f,19f);verticalLineTo(10.25f);lineTo(12f,3.75f);close()
-        moveTo(9.75f,21f);verticalLineTo(17.5f)
-        curveTo(9.75f,16.26f,10.76f,15.25f,12f,15.25f);curveTo(13.24f,15.25f,14.25f,16.26f,14.25f,17.5f)
-        verticalLineTo(21f)
+        // Roof: one smooth curve from the left wall over the apex to the right wall.
+        moveTo(4.5f,11f)
+        curveTo(4.5f,11f,9.2f,4.4f,12f,3.25f)
+        curveTo(14.8f,4.4f,19.5f,11f,19.5f,11f)
+        // Right wall into the rounded foot.
+        verticalLineTo(18.5f)
+        curveTo(19.5f,19.74f,18.49f,20.75f,17.25f,20.75f);horizontalLineTo(6.75f)
+        curveTo(5.51f,20.75f,4.5f,19.74f,4.5f,18.5f);close()
+        // Door: real arch head on a 2.5-unit radius, jambs down into the floor line.
+        moveTo(9.5f,20.5f)
+        verticalLineTo(17.35f);curveTo(9.5f,15.97f,10.62f,14.85f,12f,14.85f)
+        curveTo(13.38f,14.85f,14.5f,15.97f,14.5f,17.35f);verticalLineTo(20.5f)
     }
 
-    /** Two stacked account cards: the back card is a bare header peeking out above and behind, the
-     *  front card holds a head-and-shoulders avatar. Reads as "accounts", not as a face with ears. */
+    /** Accounts: one centred identity card with a head-and-shoulders avatar and one short line. */
     val Accounts=glyph("Hoshiori.Accounts") {
-        // Back card: only the part visible above the front card, inset on both sides.
-        moveTo(6.75f,6f);horizontalLineTo(17.25f)
-        curveTo(18.49f,6f,19.5f,7.01f,19.5f,8.25f);verticalLineTo(9.5f)
-        // Front card.
-        moveTo(4.5f,9.5f);horizontalLineTo(16f)
-        curveTo(17.1f,9.5f,18f,10.4f,18f,11.5f);verticalLineTo(18.75f)
-        curveTo(18f,19.85f,17.1f,20.75f,16f,20.75f);horizontalLineTo(4.5f)
-        curveTo(3.4f,20.75f,2.5f,19.85f,2.5f,18.75f);verticalLineTo(11.5f)
-        curveTo(2.5f,10.4f,3.4f,9.5f,4.5f,9.5f);close()
-        // Avatar inside the front card: head above, shoulders below, both centred on x = 10.25.
-        moveTo(10.25f,13f);curveTo(11.49f,13f,12.5f,14.01f,12.5f,15.25f)
-        curveTo(12.5f,16.49f,11.49f,17.5f,10.25f,17.5f)
-        curveTo(9.01f,17.5f,8f,16.49f,8f,15.25f)
-        curveTo(8f,14.01f,9.01f,13f,10.25f,13f);close()
-        moveTo(6.85f,20.9f);curveTo(6.85f,18.85f,8.35f,17.5f,10.25f,17.5f)
-        curveTo(12.15f,17.5f,13.65f,18.85f,13.65f,20.9f)
+        // Card: one closed rounded rectangle.
+        moveTo(7f,3.25f);horizontalLineTo(17f)
+        curveTo(18.38f,3.25f,19.5f,4.37f,19.5f,5.75f);verticalLineTo(18.25f)
+        curveTo(19.5f,19.63f,18.38f,20.75f,17f,20.75f);horizontalLineTo(7f)
+        curveTo(5.62f,20.75f,4.5f,19.63f,4.5f,18.25f);verticalLineTo(5.75f)
+        curveTo(4.5f,4.37f,5.62f,3.25f,7f,3.25f);close()
+        // Avatar: head, then shoulders.
+        moveTo(9.3f,8.65f)
+        curveTo(10.45f,8.65f,11.39f,9.59f,11.39f,10.74f)
+        curveTo(11.39f,11.89f,10.45f,12.83f,9.3f,12.83f)
+        curveTo(8.15f,12.83f,7.21f,11.89f,7.21f,10.74f)
+        curveTo(7.21f,9.59f,8.15f,8.65f,9.3f,8.65f);close()
+        moveTo(6.6f,16.8f)
+        curveTo(6.6f,14.65f,7.8f,13.3f,9.3f,13.3f)
+        curveTo(10.8f,13.3f,12f,14.65f,12f,16.8f)
+        // One text line beside the avatar, on the card's centre line.
+        moveTo(14.4f,12f);horizontalLineTo(17.6f)
     }
 
-    /** Ledger sheet whose right edge is a punched time card: three bound rings on the spine, a check
-     *  for filed records and two ruled lines for the entry text. */
+    /** Records: clean sheet with a filed tick and two ruled rows, no binding rings. */
     val Records=glyph("Hoshiori.Records") {
-        // Sheet: top edge with a rounded spine, straight bottom and right edges.
-        moveTo(4f,5.25f);curveTo(4f,4.28f,4.78f,3.5f,5.75f,3.5f)
-        horizontalLineTo(16f);curveTo(17.1f,3.5f,18f,4.4f,18f,5.5f)
-        verticalLineTo(19.25f);curveTo(18f,20.22f,17.22f,21f,16.25f,21f)
-        horizontalLineTo(5.75f);curveTo(4.78f,21f,4f,20.22f,4f,19.25f);close()
-        // Bound records: a short ring per row down the left margin.
-        moveTo(7f,3.5f);verticalLineTo(5.25f)
-        moveTo(7f,11.15f);verticalLineTo(12.9f)
-        moveTo(7f,18.8f);verticalLineTo(21f)
-        // Filed: a check in the top-right block.
-        moveTo(10.5f,8.4f);lineTo(11.9f,9.8f);lineTo(14.5f,7.2f)
-        // Two entry lines beside the check.
-        moveTo(10.5f,13.5f);horizontalLineTo(14.5f)
-        moveTo(10.5f,17.3f);horizontalLineTo(14.5f)
+        // Sheet outline, one closed rounded rectangle.
+        moveTo(4.5f,5.25f)
+        curveTo(4.5f,4.28f,5.28f,3.5f,6.25f,3.5f);horizontalLineTo(17.75f)
+        curveTo(18.72f,3.5f,19.5f,4.28f,19.5f,5.25f);verticalLineTo(18.75f)
+        curveTo(19.5f,19.72f,18.72f,20.5f,17.75f,20.5f);horizontalLineTo(6.25f)
+        curveTo(5.28f,20.5f,4.5f,19.72f,4.5f,18.75f);close()
+        // Filed: tick, long up-stroke.
+        moveTo(8.7f,8.6f);lineTo(10.15f,10.05f);lineTo(14.05f,5.75f)
+        // Two ruled rows.
+        moveTo(7.9f,14f);horizontalLineTo(16.1f)
+        moveTo(7.9f,17.2f);horizontalLineTo(12.9f)
     }
 
-    /** Symmetric eight-tooth gear around a clean hub, generated from one tooth lattice so it is
-     *  exactly mirrored on both axes. Not a slider row. */
-    val Settings=glyph("Hoshiori.Settings") { gear() }
+    /** Settings: three horizontal sliders with staggered hollow round handles. */
+    val Settings=glyph("Hoshiori.Settings") {
+        // Top track, broken either side of its handle at x 8.25.
+        moveTo(4.5f,5.25f);horizontalLineTo(6.65f)
+        moveTo(9.85f,5.25f);horizontalLineTo(19.5f)
+        moveTo(8.25f,3.65f)
+        curveTo(9.13f,3.65f,9.85f,4.37f,9.85f,5.25f)
+        curveTo(9.85f,6.13f,9.13f,6.85f,8.25f,6.85f)
+        curveTo(7.37f,6.85f,6.65f,6.13f,6.65f,5.25f)
+        curveTo(6.65f,4.37f,7.37f,3.65f,8.25f,3.65f);close()
+        // Middle track, broken either side of its handle at x 15.75.
+        moveTo(4.5f,12f);horizontalLineTo(14.15f)
+        moveTo(17.35f,12f);horizontalLineTo(19.5f)
+        moveTo(15.75f,10.4f)
+        curveTo(16.63f,10.4f,17.35f,11.12f,17.35f,12f)
+        curveTo(17.35f,12.88f,16.63f,13.6f,15.75f,13.6f)
+        curveTo(14.87f,13.6f,14.15f,12.88f,14.15f,12f)
+        curveTo(14.15f,11.12f,14.87f,10.4f,15.75f,10.4f);close()
+        // Bottom track, broken either side of its handle at x 8.25.
+        moveTo(4.5f,18.75f);horizontalLineTo(6.65f)
+        moveTo(9.85f,18.75f);horizontalLineTo(19.5f)
+        moveTo(8.25f,17.15f)
+        curveTo(9.13f,17.15f,9.85f,17.87f,9.85f,18.75f)
+        curveTo(9.85f,19.63f,9.13f,20.35f,8.25f,20.35f)
+        curveTo(7.37f,20.35f,6.65f,19.63f,6.65f,18.75f)
+        curveTo(6.65f,17.87f,7.37f,17.15f,8.25f,17.15f);close()
+    }
 
     // ---- Settings categories ---------------------------------------------------------------
 
@@ -312,54 +337,6 @@ object HoshioriIcons {
         curveTo(3.5f,7.31f,7.31f,3.5f,12f,3.5f);close()
         moveTo(12f,7f);verticalLineTo(12f);horizontalLineTo(15.9f)
     }
-}
-
-/**
- * Emits the [HoshioriIcons.Settings] gear: eight identical teeth on a 45-degree lattice, then the hub.
- *
- * The outline is generated from the lattice instead of hand-placed points, so all eight teeth are
- * identical, both flanks of a tooth are parallel, and the silhouette is exactly mirrored about
- * x = 12 and y = 12. The stroke-centre radii (root 6.25, tip 8.6) leave ~2.0 units from the drawn edge
- * to the canvas at the four cardinal teeth, matching the margin used by the rest of the family.
- */
-private fun androidx.compose.ui.graphics.vector.PathBuilder.gear() {
-    // Polar helper: (radius, degrees) -> absolute point on the 24-unit canvas.
-    fun polar(radius:Double,degrees:Double):Pair<Float,Float> {
-        val a=Math.toRadians(degrees)
-        return (12f+radius*Math.cos(a)).toFloat() to (12f+radius*Math.sin(a)).toFloat()
-    }
-    val root=6.25
-    val tip=8.6
-    for (tooth in 0 until 8) {
-        val axis=tooth*45.0
-        val (rx0,ry0)=polar(root,axis-9.2)
-        val (rx1,ry1)=polar(root,axis-12.6)
-        val (fx0,fy0)=polar(tip,axis-3.2)
-        val (fx1,fy1)=polar(tip,axis+3.2)
-        val (rx2,ry2)=polar(root,axis+12.6)
-        val (rx3,ry3)=polar(root,axis+9.2)
-        if (tooth==0) moveTo(rx0,ry0) else lineTo(rx0,ry0)
-        /*
-         * Root valleys and the tooth crown are shallow fillets, drawn as quadratic curves through a
-         * control point between the two ends (`quadTo`). PathBuilder's only `arcTo` overload takes both
-         * arc flags plus an explicit radius pair, which is far more error-prone for a 3-unit fillet.
-         */
-        val (v0x,v0y)=polar(root,axis-10.9)
-        quadTo(v0x,v0y,rx1,ry1)
-        lineTo(fx0,fy0)                       // left flank, slightly drummed outwards
-        val (k0x,k0y)=polar(tip+1.1,axis)
-        quadTo(k0x,k0y,fx1,fy1)               // softly crowned tip, symmetric about the tooth axis
-        lineTo(rx2,ry2)                       // right flank
-        val (v1x,v1y)=polar(root,axis+10.9)
-        quadTo(v1x,v1y,rx3,ry3)               // root valley into the next tooth
-    }
-    close()
-    // Hub: r = 3.7 around the centre, so it reads as a hole in the middle of the gear.
-    moveTo(12f,8.3f)
-    curveTo(14.04f,8.3f,15.7f,9.96f,15.7f,12f)
-    curveTo(15.7f,14.04f,14.04f,15.7f,12f,15.7f)
-    curveTo(9.96f,15.7f,8.3f,14.04f,8.3f,12f)
-    curveTo(8.3f,9.96f,9.96f,8.3f,12f,8.3f)
 }
 
 @Composable

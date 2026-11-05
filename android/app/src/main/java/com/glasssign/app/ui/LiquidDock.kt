@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import kotlin.math.PI
 import kotlin.math.abs
@@ -112,7 +113,7 @@ fun glassPolicy(api:Int,lowRam:Boolean,powerSave:Boolean,accessible:Boolean,redu
 }
 
 object GlassTokens {
-    val corner=34.dp;val margin=18.dp;val blur=18.dp;val lift=12.dp;val maxWidth=520.dp
+    val corner=30.dp;val margin=22.dp;val blur=18.dp;val lift=8.dp;val maxWidth=400.dp
     val lensInset=6.dp;val lensGap=3.dp
 }
 
@@ -183,7 +184,7 @@ internal fun glassCircleMap(x:Float):Float {
     val t=x.coerceIn(0f,1f)
     return 1f-Math.sqrt((1f-t*t).toDouble()).toFloat()
 }
-@Composable fun liquidDockHeight(fontScale:Float)=if(fontScale>1.3f)88.dp else 72.dp
+internal fun liquidDockHeight(fontScale:Float)=(60f + (fontScale.coerceIn(1f,2f)-1f)*28f).dp
 
 /**
  * Total vertical space the dock overlay occupies, in px, from the screen's bottom edge up:
@@ -243,8 +244,7 @@ internal fun dockBottomPaddingPx(overlapPx:Float,density:Density):Dp {
 }
 
 private val titles=listOf("首页","账号","记录","设置")
-// Icons come from the shared 24px rounded-stroke set owned by ui/HoshioriIcons.kt (root agent's scope);
-// this dock only picks the tint, so the selected colour keeps flowing through MaterialTheme.
+// Shared cached vectors; the dock supplies theme-aware tint.
 private val icons=listOf(HoshioriIcons.Home,HoshioriIcons.Accounts,HoshioriIcons.Records,HoshioriIcons.Settings)
 
 /** Number of dock slots; the drag math, the clamp and the semantics all read this one value. */
@@ -455,9 +455,9 @@ private const val DockCommitDistance=.5f
         .selectable(selected,role=Role.Tab,interactionSource=interaction,indication=null,onClick={onSelect(index)})
         .semantics{contentDescription=title;stateDescription=if(selected)"已选中" else "未选中"}.testTag("nav-$index"),
         verticalArrangement=Arrangement.Center,horizontalAlignment=Alignment.CenterHorizontally) {
-        Icon(icon,null,tint=if(selected)colors.primary else colors.onSurfaceVariant,modifier=Modifier.size(23.dp))
+        Icon(icon,null,tint=if(selected)colors.primary else colors.onSurfaceVariant,modifier=Modifier.size(22.dp))
         Spacer(Modifier.height(3.dp))
-        Text(title,style=MaterialTheme.typography.labelMedium,color=if(selected)colors.onSurface else colors.onSurfaceVariant,maxLines=1)
+        Text(title,style=MaterialTheme.typography.labelMedium.copy(fontSize=11.sp),color=if(selected)colors.onSurface else colors.onSurfaceVariant,maxLines=1)
     }
 }
 
@@ -636,7 +636,7 @@ internal fun dockGestureKey(enabled:Boolean,motion:Boolean,cellPx:Int,padPx:Int)
             // on an earlier pass must not make the capsule drift away from the finger.
             val pressX=down.position.x
             // Capsule position in cells for a finger at [x], derived from this gesture's own origin, so
-            // portrait, landscape, the 520dp cap and the 130% font height all work with no cached geometry.
+            // portrait, landscape and font-size changes all work with no cached geometry.
             fun capsuleAt(x:Float):Float=
                 ((originSlot*width+(x-pressX)).coerceIn(0f,(DockSlots-1)*width))/width
             var dragging=false
@@ -655,8 +655,8 @@ internal fun dockGestureKey(enabled:Boolean,motion:Boolean,cellPx:Int,padPx:Int)
                 // shows a delayed or jumping capsule.
                 dragCb(capsuleAt(crossed.position.x))
                 var lastX=crossed.position.x
-                val completed=horizontalDrag(crossed.id){move->
-                    lastX=move.position.x
+                val completed = horizontalDrag(crossed.id) { move ->
+                    lastX = move.position.x
                     dragCb(capsuleAt(move.position.x))
                     move.consume()
                 }
