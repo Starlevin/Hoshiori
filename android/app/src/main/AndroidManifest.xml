@@ -73,7 +73,7 @@
                 android:resource="@xml/plugin_download_paths" />
         </provider>
         <provider
-            android:name="androidx.core.content.FileProvider"
+            android:name=".ui.update.UpdateFileProvider"
             android:authorities="${applicationId}.updates.fileprovider"
             android:exported="false"
             android:grantUriPermissions="true">
