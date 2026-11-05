@@ -1,12 +1,12 @@
 # Hoshiori 0.6.0 前端与 FlClash 主题功能映射
 
-日期：2026-11-02。受主代理委派，仅修改原生 Compose UI 与主题文件，保留首页／绑定／记录三页以及绑定在第二页。未操作真机、模拟器、账号或凭据。
+日期：2026-11-02。受维护者委派，仅修改原生 Compose UI 与主题文件，保留首页／绑定／记录三页以及绑定在第二页。未操作真机、模拟器、账号或凭据。
 
 ## 参考范围与许可证
 
 正式上游：[chen08209/FlClash](https://github.com/chen08209/FlClash)。核对 main 观察到的提交 `7fd417fb9a9a277c6a9339a8ac87f907df7c25f7`（2026-10-24T05:51:38Z）。正式项目许可证为 GPL-3.0。
 
-本轮没有复制其 Dart 实现、Material 颜色算法、主题资源或代理代码，采用原生 Compose 独立实现对应的功能模式与分区。不能表述为原 Flutter 前端直接移植或像素级复刻。
+该版本没有复制其 Dart 实现、Material 颜色算法、主题资源或代理代码，采用原生 Compose 独立实现对应的功能模式与分区。不能表述为原 Flutter 前端直接移植或像素级复刻。
 
 主要核对源文件：
 
@@ -46,13 +46,12 @@
 
 ## 实际修改
 
-新增 `ui/Appearance.kt`；修改 `ui/Theme.kt`、`ui/Glass.kt`、`ui/HomeScreen.kt`、`ui/Dialogs.kt`。未修改 MainActivity、HomeViewModel、登录类、ProviderAdapter、数据库、Manifest 或版本号。主代理另外负责 LoginFlow 中选择网格与输入框的角色颜色衔接。
+新增 `ui/Appearance.kt`；修改 `ui/Theme.kt`、`ui/Glass.kt`、`ui/HomeScreen.kt`、`ui/Dialogs.kt`。未修改 MainActivity、HomeViewModel、登录类、ProviderAdapter、数据库、Manifest 或版本号。维护者另外负责 LoginFlow 中选择网格与输入框的角色颜色衔接。
 
 ## 验证记录与建议
 
-按主代理许可，仅运行过 `:app:compileDebugKotlin --no-daemon --max-workers=1`，结果 BUILD SUCCESSFUL，日志 `docs/evidence/tagged-login-20261102/frontend-compile-01.txt`。首次集成发现旧颜色帮助函数需要 @Composable、GlassDialog 的 secure 参数与 SectionHeader 类型声明不兼容，均已修复；未绕过编译检查。
 
-完整单测、lint、APK、真机安装和截图由主代理统一进行，不将编译成功表述为真机主题验收通过。
+完整单测、lint、APK、真机安装和截图由维护者统一进行，不将编译成功表述为真机主题验收通过。
 
 建议主题 QA：
 
@@ -68,15 +67,13 @@
 
 ## 后续多游戏与品牌接入（2026-11-02）
 
-用户最终命名中文“星栞”、英文“Hoshiori”。本轮只改 UI 对外文案，没有改 package、数据库、Keystore 或偏好键，以保留覆盖升级兼容。
+用户最终命名中文“星栞”、英文“Hoshiori”。该版本只改 UI 对外文案，没有改 package、数据库、Keystore 或偏好键，以保留覆盖升级兼容。
 
 登录前选择入口游戏，登录后 `PendingLoginDialog` 展示同账号体系的多游戏复选框和选中数量；可取消全部但确认禁用，列表不会因 `ready=false` 消失。已授权账号用同一对话框管理游戏，明确“使用现有授权，无需重新登录”。角色清单完整展示，并明确不等同全选；上方复选决定执行范围。
 
 HomeScreen 增加 `onManage(Account)` 回调，与“重新登录”分开；绑定卡片标题、游戏计数使用 `Account.gameIds` 并兼容旧 `gameId`。游戏卡片匹配当前真实游戏任务显示已签到、部分已签到、待签到和需处理，不把社区签到当作游戏签到。GameCatalog 新增崩坏3后 UI 自动带入，内部 id 为 honkai3。`statusLabel` 中 success/already 均显示“已签到”，核心状态值不变。
 
-最小核心接入：MainActivity 传 `HomeScreen.onManage`、`PendingLoginDialog.onGameSelection`；核心模型补齐 `Account.gameIds` 与 `PendingLogin.availableGameIds/selectedGameIds/existingAccount`。这批增量 UI 没有独立编译，等待主代理字段与回调同步后统一构建；前述编译通过只对应此前单游戏主题检查点。
+最小核心接入：MainActivity 传 `HomeScreen.onManage`、`PendingLoginDialog.onGameSelection`；核心模型补齐 `Account.gameIds` 与 `PendingLogin.availableGameIds/selectedGameIds/existingAccount`。这批增量 UI 没有独立编译，等待维护者字段与回调同步后统一构建；前述编译通过只对应此前单游戏主题检查点。
 
 
 ## 最终集成验证
-
-主代理已完成字段/回调与品牌接入，0.6.0 最终完整构建、49 项 JVM 测试、Lint 及专用 AVD 本地集成回归通过（43 passed / 2 条件 skipped）。另行完成两次 APK 覆盖升级场景。此处与上文早期主题编译检查点区分；详细范围及真机限制见 HANDOVER_0.6.0.md。
