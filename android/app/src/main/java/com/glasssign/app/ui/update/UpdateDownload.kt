@@ -331,7 +331,10 @@ class UpdateDownloader(
             )
         }
 
-        val digest = sha256Of(part)
+        val digest = try { sha256Of(part) } catch (e: Exception) {
+            part.delete()
+            return@withContext UpdateDownloadResult.Failed(UpdateDownloadError("无法读取下载文件，请检查存储空间后重试。"))
+        }
         if(token.isCancelled) {
             part.delete()
             return@withContext UpdateDownloadResult.Cancelled

@@ -374,6 +374,8 @@ class UpdateViewModel(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 committed = if (isCurrent(generation)) UpdateDownloadState.Idle else committed
                 throw e
+            } catch (e: Exception) {
+                committed = UpdateDownloadState.Failed("无法完成下载，请检查网络或存储空间后重试。")
             } finally {
                 // 只有仍属于这次下载才提交状态并清 token，避免取消后被后续写入覆盖。
                 if (isCurrent(generation)) {

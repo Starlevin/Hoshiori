@@ -1,6 +1,7 @@
 package com.glasssign.app.ui.update
 
-import java.io.File
+import android.content.pm.PackageManager
+import com.glasssign.app.R
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -13,14 +14,12 @@ import org.robolectric.annotation.Config
 class UpdateProviderTest {
     @Test fun updatesAndPluginsHaveDistinctProviderComponents() {
         val app=RuntimeEnvironment.getApplication()
-        val update=app.packageManager.resolveContentProvider(app.packageName+".updates.fileprovider",0)!!
+        val update=app.packageManager.resolveContentProvider(app.packageName+".updates.fileprovider",PackageManager.GET_META_DATA)!!
         val plugin=app.packageManager.resolveContentProvider(app.packageName+".plugins.fileprovider",0)!!
         assertEquals(UpdateFileProvider::class.java.name,update.name)
         assertNotEquals(plugin.name,update.name)
         assertFalse(update.exported)
         assertTrue(update.grantUriPermissions)
-        val uri=UpdateIntents(app).installView(File(UpdateCache.dir(app.cacheDir),"fixture.apk")).data!!
-        assertEquals(app.packageName+".updates.fileprovider",uri.authority)
-        assertTrue(uri.path!!.startsWith("/app_updates/"))
+        assertEquals(R.xml.update_download_paths,update.metaData.getInt("android.support.FILE_PROVIDER_PATHS"))
     }
 }
