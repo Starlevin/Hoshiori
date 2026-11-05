@@ -1,13 +1,12 @@
 package com.glasssign.app.ui
 
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createComposeRule
 import org.junit.Rule
 import org.junit.Test
 import org.junit.Assert.*
 
 class RecoveryV070Test {
-    @get:Rule val rule=createComposeRule()
+    @get:Rule val rule=createReleaseComposeRule()
     @Test fun failedMigrationShowsPreservationAndRetryInsteadOfDestructiveReset() {
         var retries=0
         rule.setContent{GlassSignTheme(true){RecoveryScreen{retries++}}}

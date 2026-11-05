@@ -2,7 +2,11 @@ package com.glasssign.app.ui
 
 import android.os.Build
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +23,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.AlertDialog
@@ -39,7 +44,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -51,7 +61,7 @@ import com.glasssign.app.ui.background.BackgroundSource
  * Local appearance navigation state. Stored as its `name` so `rememberSaveable` only has to keep a
  * String (an enum would need a custom Saver) and rotation never falls back to the overview.
  */
-internal enum class AppearanceSection { Overview, Presets, Colors, Background, Glass, Typography }
+internal enum class AppearanceSection { Overview, Presets, Colors, Background, Glass, Typography, LauncherIcon }
 
 /**
  * Full-screen host for every appearance control.
@@ -144,6 +154,7 @@ internal fun AppearanceSubPage(section: AppearanceSection, onBack: () -> Unit, m
             AppearanceSection.Background -> AppearanceBackgroundPage()
             AppearanceSection.Glass -> AppearanceGlassPage()
             AppearanceSection.Typography -> AppearanceTypographyPage()
+            AppearanceSection.LauncherIcon -> AppearanceLauncherIconPage()
         }
     }
 }
@@ -196,6 +207,7 @@ private fun AppearanceSection.label(): String = when (this) {
     AppearanceSection.Background -> "页面背景"
     AppearanceSection.Glass -> "玻璃与动效"
     AppearanceSection.Typography -> "字体与排版"
+    AppearanceSection.LauncherIcon -> "应用图标"
 }
 
 // ---------------------------------------------------------------- overview
@@ -235,6 +247,10 @@ private fun AppearanceOverview(
             AppearanceSection.Typography, "字体与排版", "文字缩放与字体",
             HoshioriIcons.Typography, settings.typographyLabel(),
         ),
+        AppearanceEntry(
+            AppearanceSection.LauncherIcon, "应用图标", "桌面图标底图，可单独选深色或浅色",
+            HoshioriIcons.System, launcherIconSummary(),
+        ),
     )
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -248,7 +264,7 @@ private fun AppearanceOverview(
         item {
             AppearanceEntryRow(
                 AppearanceEntry(
-                    AppearanceSection.Overview, "恢复默认", "只重置外观设置，不删除页面背景、账号与签到记录",
+                    AppearanceSection.Overview, "恢复默认", "只重置外观设置，不删除页面背景、应用图标、账号与签到记录",
                     HoshioriIcons.System, "重置",
                 ),
                 onClick = onResetRequest,
@@ -456,3 +472,136 @@ private fun AppearanceSettings.glassLabel(): String {
 
 private fun AppearanceSettings.typographyLabel(): String =
     if (scaleEnabled) scalePercent() else "跟随系统"
+
+// ---------------------------------------------------------------- launcher icon page
+
+/**
+ * Short label for the overview row. Keyed only on the stored choice, so it stays a one-line value; the
+ * full page states which plate that resolves to for the current page theme.
+ */
+@Composable
+private fun launcherIconSummary(): String = when (LocalLauncherIconMode.current) {
+    LauncherIconMode.FOLLOW -> "跟随应用主题"
+    LauncherIconMode.DARK -> "始终深色"
+    LauncherIconMode.LIGHT -> "始终浅色"
+}
+
+/**
+ * "应用图标": the launcher icon plate, stored in its own preference file (`launcher_icon_v1`) and entirely
+ * independent of [AppearanceSettings]. Previews are drawn from the same artwork the manifest aliases point
+ * at, so what is shown here is what the launcher draws (masked by the launcher itself).
+ */
+@Composable
+internal fun AppearanceLauncherIconPage() {
+    val mode = LocalLauncherIconMode.current
+    val controller = LocalLauncherIconController.current
+    val pageMode = LocalAppearance.current.mode
+    val systemDark = isSystemInDarkTheme()
+    val effectiveDark = LauncherIconPlan.effectiveDark(mode, pageMode, systemDark)
+    val artwork = rememberBrandArtworkCrop()
+
+    AppearanceSubScaffold(
+        title = "应用图标",
+        subtitle = "桌面图标可单独切换；系统应用信息图标随系统主题显示。",
+    ) {
+        PreferenceGroup("图标背景") {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                LauncherIconOption(
+                    mode = LauncherIconMode.FOLLOW, selected = mode, artwork = artwork,
+                    caption = "跟随应用主题", modifier = Modifier.weight(1f),
+                ) { controller?.commit(LauncherIconMode.FOLLOW) }
+                LauncherIconOption(
+                    mode = LauncherIconMode.DARK, selected = mode, artwork = artwork,
+                    caption = "始终深色", modifier = Modifier.weight(1f),
+                ) { controller?.commit(LauncherIconMode.DARK) }
+                LauncherIconOption(
+                    mode = LauncherIconMode.LIGHT, selected = mode, artwork = artwork,
+                    caption = "始终浅色", modifier = Modifier.weight(1f),
+                ) { controller?.commit(LauncherIconMode.LIGHT) }
+            }
+        }
+        PreferenceGroup("当前状态") {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(mode.label, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    when (mode) {
+                        LauncherIconMode.FOLLOW ->
+                            if (pageMode == "system") "应用主题跟随系统，桌面图标也随系统深色/浅色切换。"
+                            else "应用主题固定为${if (pageMode == "dark") "深色" else "浅色"}，桌面图标随之为${if (effectiveDark) "深色" else "浅色"}底。"
+                        LauncherIconMode.DARK -> "无论应用主题如何，桌面图标都使用深色底。"
+                        LauncherIconMode.LIGHT -> "无论应用主题如何，桌面图标都使用浅色底。"
+                    },
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    "此选项与页面深浅色分开保存，恢复默认外观不会改动它。",
+                    style = MaterialTheme.typography.bodySmall, color = Muted,
+                )
+            }
+        }
+        Text(
+            "桌面图标是否立即刷新由桌面应用决定，部分厂商桌面需要等待其缓存更新。" +
+                "「系统应用信息」中的图标固定跟随系统主题，不受此选项影响。",
+            style = MaterialTheme.typography.bodySmall, color = Muted,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
+    }
+}
+
+/**
+ * One preview button; the whole column (72dp plate + caption) is the touch target, so it is well over
+ * 48dp in both directions. The plate is the choice's own plate — FOLLOW shows the theme it currently
+ * follows — and the artwork is the cropped launcher crop, so the three options read as the launcher draws
+ * them. Accessibility text names the option and its selected state.
+ */
+@Composable
+private fun LauncherIconOption(
+    mode: LauncherIconMode,
+    selected: LauncherIconMode,
+    artwork: ImageBitmap?,
+    caption: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val isSelected = mode == selected
+    val previewDark = when (mode) {
+        LauncherIconMode.DARK -> true
+        LauncherIconMode.LIGHT -> false
+        // FOLLOW previews the theme it follows right now, not the one the current selection resolves to.
+        LauncherIconMode.FOLLOW -> LauncherIconPlan.effectiveDark(LauncherIconMode.FOLLOW, LocalAppearance.current.mode, isSystemInDarkTheme())
+    }
+    val shape = RoundedCornerShape(percent = 23)
+    Column(
+        modifier
+            .clip(GlassShape)
+            .clickable(onClick = onClick)
+            .semantics {
+                contentDescription = "图标背景 $caption" + if (isSelected) "，已选中" else ""
+            }
+            .padding(vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(
+            Modifier
+                .size(72.dp)
+                .clip(shape)
+                .background(brandPlate(previewDark))
+                .then(
+                    if (isSelected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, shape)
+                    else Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            artwork?.let { Image(it, null, Modifier.size(48.dp), contentScale = ContentScale.Fit) }
+        }
+        Text(
+            caption,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (isSelected) MaterialTheme.colorScheme.primary else Muted,
+        )
+    }
+}

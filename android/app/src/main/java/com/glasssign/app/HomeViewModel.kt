@@ -35,6 +35,7 @@ data class UiState(
     val workerError:String?=null,
     /** A specific, fixable problem raised by the last operation. The home page renders its own buttons for it. */
     val fix:AuthFix?=null,
+    val disabledProviders:Set<String> = emptySet(),
 )
 
 /**
@@ -48,6 +49,11 @@ class HomeViewModel(application:Application):AndroidViewModel(application) {
     private val scheduler=SignScheduler(application)
     var state by mutableStateOf(UiState(reduceMotion=local.prefs.getBoolean("reduce_motion",false)))
         private set
+    private val providerListener=local.registry.listen{refresh(false)}
+    override fun onCleared() {
+        local.registry.stopListening(providerListener)
+        super.onCleared()
+    }
     init {
         refresh()
         viewModelScope.launch {
@@ -89,6 +95,7 @@ class HomeViewModel(application:Application):AndroidViewModel(application) {
         return AuthFix(accountId.orEmpty(),account?.provider.orEmpty(),account?.nickname,cause,retryable=false)
     }
     private suspend fun reload() {
+        val disabledProviders=local.registry.snapshot().filter{!it.enabled}.map{it.manifest.id}.toSet()
         val snapshot=withContext(Dispatchers.IO) {
             val day=SignRepository.day();val records=local.repository.records(day)
             Overview(day,SignRepository.now(),BuildConfig.VERSION_NAME,local.prefs.getString("daily_time","08:10")!!,"",local.repository.accounts(),records,records.groupingBy{it.status}.eachCount(),false,local.prefs.getString("last_finished",null),local.prefs.getString("last_trigger",null),local.prefs.getString("last_started",null))
@@ -103,9 +110,9 @@ class HomeViewModel(application:Application):AndroidViewModel(application) {
         if(serializeBook(book)!=storedBook)local.prefs.edit().putString(HOME_FEEDBACK_PREFS,serializeBook(book)).apply()
         val feedback=summarize(
             day=snapshot.date,
-            accounts=snapshot.accounts.map{AuthAccount(it.id,it.provider,it.nickname,it.enabled,it.authState,it.authMessage,it.bindingPending,it.roleScope,it.gameIds)},
+            accounts=snapshot.accounts.map{AuthAccount(it.id,it.provider,it.nickname,it.enabled&&it.provider !in disabledProviders,it.authState,it.authMessage,it.bindingPending,it.roleScope,it.gameIds)},
             // Enabled bindings of ENABLED accounts only: a paused account may not raise the "应签到" denominator.
-            tasks=bindings.filter{it.enabled&&snapshot.accounts.firstOrNull{a->a.id==it.accountId}?.enabled==true}.distinctBy{it.accountId to it.targetId},
+            tasks=bindings.filter{it.enabled&&snapshot.accounts.firstOrNull{a->a.id==it.accountId}?.let{a->a.enabled&&a.provider !in disabledProviders}==true}.distinctBy{it.accountId to it.targetId},
             records=snapshot.records,
             accountNames=snapshot.accounts.associate{it.id to it.nickname},
             running=state.jobRunning||state.submitting,
@@ -113,12 +120,16 @@ class HomeViewModel(application:Application):AndroidViewModel(application) {
             lastStartedAt=snapshot.lastStartedAt,
             lastFinishedAt=snapshot.lastFinishedAt,
         ).let{base->base.copy(result=runResult(base,local.prefs.getString("last_trigger","").orEmpty(),snapshot.lastFinishedAt.orEmpty(),book.sequence,workerError))}
-        state=state.copy(bindings=bindings,history=history,timeline=timeline,overview=snapshot,loading=false,feedback=feedback,workerError=workerError,scheduleEnabled=local.prefs.getBoolean("schedule_enabled",false),dailyTime=local.prefs.getString("daily_time","08:10")!!)
+        state=state.copy(bindings=bindings,history=history,timeline=timeline,overview=snapshot,loading=false,feedback=feedback,workerError=workerError,scheduleEnabled=local.prefs.getBoolean("schedule_enabled",false),dailyTime=local.prefs.getString("daily_time","08:10")!!,disabledProviders=disabledProviders)
     }
     fun refresh(showLoading:Boolean=true) {if(showLoading)state=state.copy(loading=true);action{reload()}}
     fun runNow(accountIds:List<String>?=null) {
         if(state.jobRunning || state.waitingNetwork || state.submitting) {
             state=state.copy(message=Message("已有本地任务执行或排队，完成后可再次检查"));return
+        }
+        val selected=state.overview?.accounts.orEmpty().filter{accountIds==null||it.id in accountIds}
+        if(selected.isNotEmpty()&&selected.none{local.registry.isExecutionAllowed(it.provider)}) {
+            state=state.copy(message=Message("所选平台适配器已暂停，请在设置 → 实验室中启用"));return
         }
         state=state.copy(submitting=true,fix=null)
         action {

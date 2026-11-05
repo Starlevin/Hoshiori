@@ -2,7 +2,6 @@ package com.glasssign.app.ui
 
 import androidx.compose.runtime.*
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createComposeRule
 import com.glasssign.app.data.RoleChoice
 import com.glasssign.app.login.PendingLogin
 import org.junit.Rule
@@ -10,7 +9,7 @@ import org.junit.Test
 import org.junit.Assert.*
 
 class BindingV070Test {
-    @get:Rule val rule=createComposeRule()
+    @get:Rule val rule=createReleaseComposeRule()
     @Test fun roleSelectionRequiresSeparateReviewAndFinalConfirmationAndDoesNotSign() {
         var saved=0
         rule.setContent {

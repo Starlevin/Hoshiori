@@ -4,6 +4,20 @@
 
 Public account-login protocol compatibility was adapted with reference to [Candy-QAQ/NTE-Auto-Sign](https://github.com/Candy-QAQ/NTE-Auto-Sign/tree/38d77e1f7dc784f2baeb49c41cd4352deadf2b24), commit `38d77e1f7dc784f2baeb49c41cd4352deadf2b24`, MIT license, Copyright (c) 2023 xxyz30. The full upstream license is retained in `android/app/src/main/assets/NOTICE-NTE-Auto-Sign.txt` and packaged with the APK. No third-party device fingerprint, captcha solver or cloud execution code is included from that reference.
 
+## Haze — Glass material and container (v2.1.0)
+
+The experimental water-drop dock (`android/app/src/main/java/com/glasssign/app/ui/WaterDropDock.kt`) is built on `dev.chrisbanes.haze:haze-glass:2.1.0`, which brings in `dev.chrisbanes.haze:haze:2.1.0` and `dev.chrisbanes.haze:haze-utils:2.1.0`. Licensed under the **Apache License 2.0**, Copyright 2026 Christopher Banes and the Haze project contributors.
+
+- Upstream: <https://github.com/chrisbanes/haze>
+- Fixed reference used as the verification source: tag `2.1.0`, commit `ca21ff2060e52e1882afdb94f9b055f7fc834bd9`
+- Maven coordinates: `dev.chrisbanes.haze:haze-glass:2.1.0` (Apache-2.0)
+- Upstream publishes **no** `NOTICE` file; the license text alone is retained.
+- Full Apache-2.0 license is packaged at `android/app/src/main/assets/licenses/haze-apache-2.0.txt` (identical to upstream `LICENSE`, SHA-256 `1EB85FC97224598DAD1852B5D6483BBCF0AA8608790DCC657A5A2A761AE9C8C6`).
+
+This is a **binary dependency used through Haze's public API**; the upstream library is not vendored or modified. The application supplies its own `GlassStyle` optics, dock geometry, distance budget and gesture handling. Haze's own `hazeGlassContainer` performs the member merging described in that file.
+
+Enabling Haze 2.1.0 required a toolchain upgrade: AGP 9.5.0, Gradle 9.8.2, Kotlin 2.4.21 and `compileSdk 37`, because the library's AAR metadata declares `minCompileSdk=37` and ships Kotlin 2.4 metadata. See `UPGRADE-haze-integration-log.md` in the working notes for the verified version matrix and dependency resolution.
+
 ## Backdrop (Kyant0/AndroidLiquidGlass) — library and catalog components (v0.7.8)
 
 The standard Android 13+ animated dock directly depends on `io.github.kyant0:backdrop:1.0.0` (Apache-2.0, Copyright 2025 Kyant). Its `LiquidBottomTabs`, `LiquidBottomTab` and gesture/highlight helpers are migrated from the upstream catalog at fixed commit `eada9a8600142c1bd6a5c5fc143d06f599cdfaef` (tag `1.0.0`) under `android/app/src/main/java/com/glasssign/app/ui/upstream/`. Source headers retain attribution and identify app-specific changes. The application adapter supplies theme colors, height, navigation and accessibility semantics. The combined page/tab capture, refraction and shadow pipeline are retained. Preview.3 modifies the lens inset and drag handling: horizontal gestures start across the bar, pointer positions update directly, superseded spring jobs are cancelled, and cancelled gestures do not change the page. Full Apache-2.0 license is packaged at `assets/licenses/backdrop-apache-2.0.txt`.

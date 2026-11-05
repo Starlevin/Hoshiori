@@ -15,7 +15,7 @@ New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $apk = Join-Path $OutputDirectory "hoshiori-v$version-release.apk"
 if (Test-Path -LiteralPath $apk) { throw 'Signed artifact already exists; preserve it and choose a new output directory.' }
 $sdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { Join-Path $env:LOCALAPPDATA 'Android/Sdk' }
-$buildTools = Join-Path $sdk 'build-tools/35.0.0'
+$buildTools = Join-Path $sdk 'build-tools/37.0.0'
 $signDir = Join-Path $env:LOCALAPPDATA 'Hoshiori/signing'
 $keystore = Join-Path $signDir 'hoshiori-release.jks'
 $passwordFile = Join-Path $signDir 'release-password.dpapi'

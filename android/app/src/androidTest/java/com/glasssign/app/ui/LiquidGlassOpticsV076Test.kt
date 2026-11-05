@@ -18,7 +18,6 @@ import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -36,13 +35,13 @@ import kotlin.math.abs
  *  - real pixels through [OpticalPass] and [EdgeLightPass], which need API 33+ because the effects are
  *    Android AGSL `RuntimeShader`s.
  *
- * Deliberately device-free: `createComposeRule` only. It does not assert "looks like the video"; it pins
+ * Uses isolated Compose content on the Release activity. It does not assert "looks like the video"; it pins
  * the measurable properties that were wrong before (a bevel that could swallow a short capsule, a bend
  * larger than its own bevel, a rim light that was a straight white gradient) and the ones a regression
  * would silently undo.
  */
 class LiquidGlassOpticsV076Test {
-    @get:Rule val rule=createComposeRule()
+    @get:Rule val rule=createReleaseComposeRule()
 
     private companion object {
         const val d=2.6f

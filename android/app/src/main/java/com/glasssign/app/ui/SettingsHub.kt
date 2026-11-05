@@ -15,7 +15,7 @@ import com.glasssign.app.UiState
 
 internal enum class SettingsSection(val title:String) {
     HOME("设置"),AUTOMATION("自动签到"),DIAGNOSTICS("运行与权限"),
-    PRIVACY("数据与隐私"),UPDATES("版本与更新"),ABOUT("关于星栞")
+    LAB("实验室"),PRIVACY("数据与隐私"),UPDATES("版本与更新"),ABOUT("关于星栞")
 }
 
 internal fun themeDisplayName(settings:AppearanceSettings)=when {
@@ -27,7 +27,7 @@ internal fun themeDisplayName(settings:AppearanceSettings)=when {
 }
 
 @Composable
-internal fun SettingsHub(scheduleSummary:String,onAppearance:()->Unit,onSection:(SettingsSection)->Unit,onPlugins:()->Unit) {
+internal fun SettingsHub(scheduleSummary:String,onAppearance:()->Unit,onSection:(SettingsSection)->Unit) {
     Column(Modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(22.dp)) {
         PreferenceGroup("使用偏好") {
             PreferenceRow("外观与主题","主题、配色与页面背景",HoshioriIcons.Appearance,onAppearance,
@@ -39,7 +39,7 @@ internal fun SettingsHub(scheduleSummary:String,onAppearance:()->Unit,onSection:
         PreferenceGroup("运行与扩展") {
             PreferenceRow("运行与权限","通知、电池与任务诊断",HoshioriIcons.Activity,{onSection(SettingsSection.DIAGNOSTICS)})
             PreferenceDivider()
-            PreferenceRow("插件与扩展","管理按需安装的功能",HoshioriIcons.Puzzle,onPlugins)
+            PreferenceRow("实验室","平台适配器、实验效果与本机诊断",HoshioriIcons.Puzzle,{onSection(SettingsSection.LAB)})
         }
         PreferenceGroup("应用与数据") {
             PreferenceRow("数据与隐私","本机授权与账号管理",HoshioriIcons.Shield,{onSection(SettingsSection.PRIVACY)})

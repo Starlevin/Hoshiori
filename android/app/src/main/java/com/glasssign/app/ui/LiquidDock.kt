@@ -59,46 +59,141 @@ import kotlinx.coroutines.launch
 import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.hazeSource
 
-class PageBackdropState(val cached:GraphicsLayer,val capture:Boolean=true,val upstream:LayerBackdrop?=null) {
+/**
+ * @param cached the display list the stable dock samples; `null` only when a caller needs the state
+ *   bookkeeping without any capture, as the JVM tests do (a real [GraphicsLayer] needs graphics init).
+ */
+class PageBackdropState(val cached:GraphicsLayer?,val capture:Boolean=true,val upstream:LayerBackdrop?=null) {
     var ready by mutableStateOf(false)
         internal set
     var captureRevision by mutableIntStateOf(0)
         internal set
+    /**
+     * The Haze source shared with the experimental water-drop dock.
+     *
+     * Haze's material can only sample content that a `hazeSource` has captured, and that source has to be
+     * an ANCESTOR of the sampled content. The dock cannot wrap the page itself, so the page's own capture
+     * modifier publishes this state and the dock's glass reads from it. It stays null until the first
+     * consumer asks for it, so the shipped (non-experimental) path never pays for a Haze layer.
+     */
+    internal var haze:HazeState? by mutableStateOf(null)
+        private set
+
+    /**
+     * True once some ancestor actually attached a `hazeSource` for [haze].
+     *
+     * Distinguishes "the state exists because the dock asked for it" from "the page is really publishing
+     * into it". Without this the dock could build a glass material that samples an empty state and render a
+     * plausible-looking but contentless surface, which is worse than an honest fallback: it would look like
+     * the integration worked. The page's capture modifier sets this.
+     */
+    var hazeSourceAttached by mutableStateOf(false)
+        private set
+
+    /** Called by the page's source modifier once it has attached the source. */
+    internal fun markHazeSourceAttached() { hazeSourceAttached = true }
+    internal fun markHazeSourceDetached() { hazeSourceAttached = false }
+
+    /** Creates the shared [HazeState] once, on first experimental consumer. */
+    internal fun hazeState():HazeState=haze?:HazeState().also{haze=it}
 }
 
 fun Modifier.backdropSource(layer:GraphicsLayer,enabled:Boolean):Modifier=if(!enabled)this else drawWithContent {
     layer.record {this@drawWithContent.drawContent()};drawLayer(layer)
 }
-fun Modifier.backdropSource(state:PageBackdropState):Modifier=if(!state.capture)this else if(state.upstream!=null)
+/**
+ * Publishes the page snapshot the dock samples.
+ *
+ * The page is the only place that can do this: a Haze source must be an ANCESTOR of what it captures, and
+ * the dock is a SIBLING of the page. Attaching here also means the experiment is wired up without the page
+ * having to know it exists - the existing call site keeps its shipped modifier expression and the glass
+ * still gets a real source.
+ *
+ * The Haze layer is only attached once an experimental consumer has asked for the state, so the shipped
+ * path still never pays for one.
+ */
+@Composable fun Modifier.backdropSource(state:PageBackdropState):Modifier {
+    return this.backdropSourceChain(state)
+}
+
+private fun Modifier.backdropSourceChain(state:PageBackdropState):Modifier=if(!state.capture)this else if(state.upstream!=null)
     // Keep the visible page independent of the RenderNode reused by animated lens sampling.
     graphicsLayer { compositingStrategy=CompositingStrategy.Offscreen }.layerBackdrop(state.upstream).drawWithContent {
         @Suppress("UNUSED_VARIABLE") val revision=state.captureRevision
         drawContent()
         if(!state.ready&&size.width>0f&&size.height>0f)state.ready=true
     }
-else drawWithContent {
+else state.cached?.let { cachedLayer -> drawWithContent {
     @Suppress("UNUSED_VARIABLE") val revision=state.captureRevision
-    state.cached.record {this@drawWithContent.drawContent()}
-    drawLayer(state.cached)
+    cachedLayer.record {this@drawWithContent.drawContent()}
+    drawLayer(cachedLayer)
     // One transition after the first real page recording, never an every-frame invalidation loop.
     if(!state.ready&&size.width>0f&&size.height>0f)state.ready=true
+} } ?: this
+
+/**
+ * [backdropSource] plus a Haze capture, used only while the water-drop experiment is on.
+ *
+ * The Haze source is applied AFTER the normal recording so it observes exactly the content the stable
+ * path already captures. Because this modifier is on the page, and the dock is a SIBLING of the page, the
+ * material can never sample the dock's own glass - which is what keeps the experiment from feeding back on
+ * itself as the lens moves.
+ */
+@Composable fun Modifier.hazePageSource(state:PageBackdropState,enabled:Boolean=true):Modifier {
+    val captured=this.backdropSourceChain(state)
+    return if(enabled)captured.attachHazeSource(state) else captured
 }
 
-data class GlassPolicy(val blur:Boolean,val motion:Boolean,val reason:String)
+/**
+ * Publishes [PageBackdropState.haze]'s state as a real `hazeSource` on whatever this modifier is applied to.
+ *
+ * NOT `@Composable`, which matters: it means the *existing* page call site (`Modifier.backdropSource(page)`)
+ * can opt in without being rewritten. That is what makes the wiring order-independent - the page keeps its
+ * shipped modifier expression, and the glass still has a real ancestor source to sample.
+ *
+ * Order-independent because the state is created on first ask. Whichever runs first - the dock asking for the
+ * state, or the page attaching the source - both end up looking at the same [HazeState].
+ */
+@Composable internal fun Modifier.attachHazeSource(state:PageBackdropState):Modifier {
+    val haze=state.hazeState()
+    // Reports that an ancestor really published the capture, so the dock can tell "wired up" from
+    // "state exists but nothing is sampling into it". A side effect keeps the write out of composition.
+    DisposableEffect(state) {
+        state.markHazeSourceAttached()
+        onDispose{state.markHazeSourceDetached()}
+    }
+    return this.hazeSource(haze)
+}
+
+data class GlassPolicy(val blur:Boolean,val motion:Boolean,val reason:String,val opaqueForAccessibility:Boolean=false)
 fun glassPolicy(api:Int,lowRam:Boolean,powerSave:Boolean,accessible:Boolean,reduceMotion:Boolean,animators:Boolean,mode:String):GlassPolicy {
     val reason=when {
         mode=="off"->"玻璃已关闭";mode=="light"->"轻量材质";api<31->"系统不支持实时模糊"
         lowRam->"低内存设备";powerSave->"系统省电模式";accessible->"辅助功能高对比";else->"实时背景采样"
     }
-    return GlassPolicy(mode=="standard"&&api>=31&&!lowRam&&!powerSave&&!accessible,!reduceMotion&&animators,reason)
+    return GlassPolicy(mode=="standard"&&api>=31&&!lowRam&&!powerSave&&!accessible,!reduceMotion&&animators,reason,accessible)
 }
-@Composable fun currentGlassPolicy():GlassPolicy {
+@Composable fun currentGlassPolicy(mode:String=LocalAppearance.current.glassMode):GlassPolicy {
     val context=LocalContext.current
     val powerManager=context.getSystemService(PowerManager::class.java)
     val accessibility=context.getSystemService(AccessibilityManager::class.java)
     var explored by remember{mutableStateOf(accessibility.isTouchExplorationEnabled)}
     var power by remember{mutableStateOf(powerManager.isPowerSaveMode)}
+    var animators by remember{mutableStateOf(ValueAnimator.areAnimatorsEnabled())}
+    DisposableEffect(context) {
+        val resolver=context.contentResolver
+        val key=android.provider.Settings.Global.ANIMATOR_DURATION_SCALE
+        val observer=object:android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+            override fun onChange(selfChange:Boolean) {
+                animators=android.provider.Settings.Global.getFloat(resolver,key,1f)>0f
+            }
+        }
+        resolver.registerContentObserver(android.provider.Settings.Global.getUriFor(key),false,observer)
+        onDispose{resolver.unregisterContentObserver(observer)}
+    }
     DisposableEffect(accessibility) {
         val listener=AccessibilityManager.TouchExplorationStateChangeListener{explored=it}
         accessibility.addTouchExplorationStateChangeListener(listener)
@@ -110,7 +205,7 @@ fun glassPolicy(api:Int,lowRam:Boolean,powerSave:Boolean,accessible:Boolean,redu
         onDispose{context.unregisterReceiver(receiver)}
     }
     return glassPolicy(Build.VERSION.SDK_INT,context.getSystemService(ActivityManager::class.java).isLowRamDevice,power,explored,
-        LocalReduceMotion.current,ValueAnimator.areAnimatorsEnabled(),LocalAppearance.current.glassMode)
+        LocalReduceMotion.current,animators,mode)
 }
 
 object GlassTokens {
@@ -249,7 +344,7 @@ private val titles=listOf("首页","账号","记录","设置")
 private val icons=listOf(HoshioriIcons.Home,HoshioriIcons.Accounts,HoshioriIcons.Records,HoshioriIcons.Settings)
 
 /** Number of dock slots; the drag math, the clamp and the semantics all read this one value. */
-private const val DockSlots=4
+internal const val DockSlots=4
 
 /**
  * Distance, in cells, the capsule must be pulled away from the slot it started on (its own travel and
@@ -270,7 +365,40 @@ private const val DockCommitDistance=.5f
 @Composable fun LiquidDock(selected:Int,onSelect:(Int)->Unit,source:GraphicsLayer,policy:GlassPolicy,enabled:Boolean=true,modifier:Modifier=Modifier,onOverlapChange:(Float)->Unit={}) {
     Dock(selected,onSelect,source,policy,enabled,modifier,onOverlapChange)
 }
-@Composable fun LiquidDock(selected:Int,onSelect:(Int)->Unit,backdrop:PageBackdropState,policy:GlassPolicy,enabled:Boolean=true,modifier:Modifier=Modifier,onOverlapChange:(Float)->Unit={}) {
+/**
+ * [waterDropEnabled] and [onWaterDropError] are appended AFTER [onOverlapChange] so every existing call
+ * site keeps working unchanged: this overload is already the last parameter, and nothing else can be
+ * shifted by inserting names here.
+ *
+ * The experimental water-drop surface is only entered when the whole stack below it is already sound:
+ * API 33+, the sampled page frame has actually arrived, the user's own blur and motion settings are on,
+ * and the caller enabled the experiment. Anything else falls through to the stable dock, so a device that
+ * cannot run the material still gets a correct, usable bar instead of a broken one.
+ */
+@Composable fun LiquidDock(
+    selected:Int,
+    onSelect:(Int)->Unit,
+    backdrop:PageBackdropState,
+    policy:GlassPolicy,
+    enabled:Boolean=true,
+    modifier:Modifier=Modifier,
+    onOverlapChange:(Float)->Unit={},
+    waterDropEnabled:Boolean=false,
+    onWaterDropError:(String)->Unit={},
+) {
+    /*
+     * Ask for the shared Haze state BEFORE the dock renders, while the experiment is enabled.
+     *
+     * Ordering matters: the page is composed before the dock, and the page only attaches its `hazeSource`
+     * once this state exists. If only the dock created it, the page would not have a source on its first
+     * composition and the material would sample nothing until the next recomposition. Creating it here -
+     * from the flag, not from the dock's own rendering - means the page sees it on the very first frame the
+     * experiment is on.
+     *
+     * The shipped path is untouched: with the flag off this never creates a state, so no Haze layer is ever
+     * attached for users who have not enabled the experiment.
+     */
+    if(waterDropEnabled&&Build.VERSION.SDK_INT>=33) remember(backdrop){backdrop.hazeState()}
     // Do not build a native sampling effect over an empty first-frame RenderNode. Keep the dock
     // visible and interactive using its opaque fallback until the page has actually been recorded.
     var sampledFrameReady by remember(backdrop){mutableStateOf(false)}
@@ -287,12 +415,26 @@ private const val DockCommitDistance=.5f
             sampledFrameReady=true
         }
     }
+    // The experiment is only legal once every prerequisite holds. Kept as one named value so the router
+    // below reads as a single decision instead of a chain of inline conditions.
+    val waterDropActive=waterDropEnabled&&sampledFrameReady&&policy.blur&&policy.motion&&Build.VERSION.SDK_INT>=33
     // Material activation replaces the provisional layer once, so its first opaque display list
     // cannot retain an empty shared-input cache. This key is stable throughout navigation/dragging.
-    key(sampledFrameReady) {
-        if(sampledFrameReady&&policy.blur&&policy.motion&&Build.VERSION.SDK_INT>=33&&backdrop.upstream!=null&&enabled)
+    key(sampledFrameReady,waterDropActive) {
+        // `cached` is null only for a caller that wanted the state bookkeeping without a capture (the JVM
+        // tests). There is nothing to sample then, so the opaque dock is the only honest rendering; a real
+        // page always supplies a layer.
+        val cachedLayer=backdrop.cached
+        if(waterDropActive)
+            WaterDropDock(selected,onSelect,backdrop,policy,enabled,modifier,onOverlapChange,onWaterDropError)
+        else if(sampledFrameReady&&policy.blur&&policy.motion&&Build.VERSION.SDK_INT>=33&&backdrop.upstream!=null&&enabled&&cachedLayer!=null)
             UpstreamLiquidDock(selected,onSelect,backdrop.upstream,modifier,onOverlapChange)
-        else Dock(selected,onSelect,backdrop.cached,policy.copy(blur=policy.blur&&sampledFrameReady),enabled,modifier,onOverlapChange)
+        else if(cachedLayer!=null)
+            Dock(selected,onSelect,cachedLayer,policy.copy(blur=policy.blur&&sampledFrameReady),enabled,modifier,onOverlapChange)
+        else if(backdrop.upstream!=null)
+            UpstreamLiquidDock(selected,onSelect,backdrop.upstream,modifier,onOverlapChange)
+        else
+            WaterDropFallback(selected,onSelect,modifier,onOverlapChange)
     }
 }
 @Composable fun LiquidDock(selected:Int,onSelect:(Int)->Unit,source:GraphicsLayer,policy:GlassPolicy,modifier:Modifier) {

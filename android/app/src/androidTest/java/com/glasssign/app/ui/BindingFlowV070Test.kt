@@ -7,7 +7,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
 import com.glasssign.app.data.RoleChoice
 import com.glasssign.app.login.PendingLogin
@@ -27,7 +26,7 @@ import org.junit.Test
  * touch target.
  */
 class BindingFlowV070Test {
-    @get:Rule val rule=createComposeRule()
+    @get:Rule val rule=createReleaseComposeRule()
 
     private val roles=listOf(
         RoleChoice("genshin|fixture-main|server","genshin","原神 · 旅行者"),

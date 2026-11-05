@@ -185,7 +185,7 @@ class SignRepository(private val owner:Context,private val databaseName:String="
 
     fun enabled(id:String,value:Boolean) {
         // Account switches cannot bypass the separate role-confirmation step.
-        writableDatabase.execSQL("UPDATE accounts SET enabled=? WHERE id=? AND (?=0 OR (auth!='pending' AND NOT EXISTS (SELECT 1 FROM pending_bindings WHERE account=accounts.id)))",arrayOf(if(value)1 else 0,id,if(value)1 else 0))
+        writableDatabase.execSQL("UPDATE accounts SET enabled=? WHERE id=? AND (?=0 OR (auth!='pending' AND NOT EXISTS (SELECT 1 FROM pending_bindings WHERE account=accounts.id)))",arrayOf<Any?>(if(value)1 else 0,id,if(value)1 else 0))
     }
     fun auth(id:String,state:String,message:String) { writableDatabase.execSQL("UPDATE accounts SET auth=?,auth_message=?,verified=? WHERE id=?",arrayOf(state,message,now(),id)) }
     fun authDiagnostic(id:String,message:String) {writableDatabase.execSQL("UPDATE accounts SET auth_message=? WHERE id=?",arrayOf(message,id))}
@@ -208,7 +208,7 @@ class SignRepository(private val owner:Context,private val databaseName:String="
     }
     fun pendingBinding(id:String):PendingBinding? = pendingBindings().firstOrNull{it.accountId==id}
     fun markPendingRoles(id:String,verified:Boolean,available:List<String> = emptyList()) {
-        writableDatabase.execSQL("UPDATE pending_bindings SET roles_verified=?,available_games=? WHERE account=?",arrayOf(if(verified)1 else 0,if(verified)available.distinct().joinToString(",") else "",id))
+        writableDatabase.execSQL("UPDATE pending_bindings SET roles_verified=?,available_games=? WHERE account=?",arrayOf<Any?>(if(verified)1 else 0,if(verified)available.distinct().joinToString(",") else "",id))
     }
     fun setGames(id:String,ids:List<String>) {
         val a=accounts().first{it.id==id}
@@ -285,8 +285,8 @@ class SignRepository(private val owner:Context,private val databaseName:String="
     }
     fun identity(id:String,value:String) {writableDatabase.execSQL("UPDATE accounts SET provider_uid=? WHERE id=?",arrayOf(value,id))}
     fun duplicate(provider:String,uid:String,excluding:String):Account?=if(uid.isBlank())null else accounts().firstOrNull{it.id!=excluding&&!it.bindingPending&&it.provider==provider&&it.providerUserId==uid}
-    fun autoEnabled(id:String,value:Boolean) {writableDatabase.execSQL("UPDATE accounts SET auto_enabled=? WHERE id=?",arrayOf(if(value)1 else 0,id));writableDatabase.execSQL("UPDATE game_bindings SET auto_sign=? WHERE account=?",arrayOf(if(value)1 else 0,id))}
-    fun bindingEnabled(id:String,target:String,enabled:Boolean) {writableDatabase.execSQL("UPDATE game_bindings SET enabled=? WHERE account=? AND target=?",arrayOf(if(enabled)1 else 0,id,target))}
+    fun autoEnabled(id:String,value:Boolean) {writableDatabase.execSQL("UPDATE accounts SET auto_enabled=? WHERE id=?",arrayOf<Any?>(if(value)1 else 0,id));writableDatabase.execSQL("UPDATE game_bindings SET auto_sign=? WHERE account=?",arrayOf<Any?>(if(value)1 else 0,id))}
+    fun bindingEnabled(id:String,target:String,enabled:Boolean) {writableDatabase.execSQL("UPDATE game_bindings SET enabled=? WHERE account=? AND target=?",arrayOf<Any?>(if(enabled)1 else 0,id,target))}
     fun rename(id:String,alias:String) {require(alias.isNotBlank());writableDatabase.execSQL("UPDATE accounts SET nickname=? WHERE id=?",arrayOf(alias.take(40),id))}
     fun deleteRecords(id:String) {
         val db=writableDatabase;db.beginTransaction()

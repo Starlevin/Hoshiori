@@ -36,18 +36,17 @@ internal fun AppearanceGlassPage() {
 
     AppearanceSubScaffold(
         title = "玻璃与动效",
-        subtitle = "材质的静态层次与省电回退，只影响观感，不影响签到。",
+        subtitle = "调整界面对比度、表面层次和动画。",
     ) {
         PreferenceGroup("玻璃材质") {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                ChoiceChips(
-                    options = listOf("standard" to "标准", "light" to "轻量", "off" to "关闭"),
-                    selected = settings.glassMode,
-                ) { update(settings.copy(glassMode = it)) }
-                GlassHint(
-                    "标准使用真实页面背景采样；轻量降低开销；关闭后使用不透明底色。" +
-                        "低内存、省电模式或辅助功能高对比会自动回退，不在此处显示为已选状态。",
+                SettingToggleRow(
+                    title = "减少透明效果",
+                    description = "使用不透明的导航底色",
+                    checked = settings.glassMode == "off",
+                    onChecked = { update(settings.copy(glassMode = if (it) "off" else "standard")) },
                 )
+                GlassHint("在设置的实验室中选择 Liquid Glass 2.0 的完整、轻量或关闭模式。")
             }
         }
         PreferenceGroup("表面层次") {

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark uiMode plate for the system-following launcher icon. -->
+    <color name="hoshiori_icon_background">#101525</color>
+</resources>

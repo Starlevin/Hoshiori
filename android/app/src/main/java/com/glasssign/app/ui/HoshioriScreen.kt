@@ -32,9 +32,14 @@ import androidx.compose.ui.unit.*
 import com.glasssign.app.*
 import com.glasssign.app.data.*
 import com.glasssign.app.local.SignRepository
+import com.glasssign.app.local.GlassQuality
 import com.glasssign.app.login.PendingLogin
 import com.glasssign.app.ui.update.UpdateViewModel
 import com.glasssign.app.ui.update.rememberHoshioriUpdateViewModel
+import dev.chrisbanes.haze.HazeInput
+import dev.chrisbanes.haze.HazeSourceRetention
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.launch
 import java.time.*
 import java.time.format.DateTimeFormatter
@@ -339,9 +344,13 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
 
     val vmDeps=remember(vm){VmActions(vm)}
     val onSelect=remember(scope){ { index:Int -> scope.tab=index; scope.detail=null } }
-    val policy=currentGlassPolicy()
-    // The dock samples the page content into a layer; must match policy.blur exactly.
-    val backdrop=rememberPageBackdrop(policy.blur)
+    val rendering=rememberDockRendering(rememberLabGlassState().first)
+    val hazeState=rememberHazeState()
+    val glassInput=remember(hazeState){HazeInput.Sources(hazeState,retention=HazeSourceRetention.ClearWhenUnavailable)}
+    val singleLens=remember(context) {
+        BuildConfig.DEBUG&&context.getSharedPreferences("glass_dock_qa",Context.MODE_PRIVATE)
+            .getBoolean("single_lens",false)
+    }
     /*
      * Actual dock overlay height in px, measured by the dock after layout (bar + lift + navigation-bar
      * inset). Held here so the list's bottom contentPadding follows the real value instead of a fixed
@@ -352,17 +361,15 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
     val dockOverlap=remember{mutableFloatStateOf(0f)}
     val densityNow=LocalDensity.current
 
-    Box(Modifier.fillMaxSize().background(colors.background)) {
-        // [LAYOUT-vs-DRAW] Box owns the snapshot: everything inside this Box is the page, and the dock is a
-        // SIBLING (outside), so the snapshot can never contain the dock (no feedback loop) and never needs
-        // the dock's position. Recording still happens in a DRAW modifier (recording in a layout lambda
-        // throws "layer is not in a draw pass"); nothing here records from a measure/layout pass.
-        Box(Modifier.fillMaxSize().backdropSource(backdrop)) {
+    Box(Modifier.fillMaxSize()) {
+        // Only the page is sampled. Dock, sheets and transient messages are siblings.
+        val capture=if(rendering.mode==GlassQuality.FULL&&!modalOpen)Modifier.hazeSource(hazeState) else Modifier
+        Box(Modifier.fillMaxSize().then(capture).background(colors.background)) {
             com.glasssign.app.ui.background.HoshioriBackground(Modifier.fillMaxSize())
             key(scope.tab,scope.detail) {
                 LazyColumn(
                     state=listState,
-                    modifier=Modifier.fillMaxSize()
+                    modifier=Modifier.align(Alignment.TopCenter).widthIn(max=840.dp).fillMaxSize()
                         .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top+WindowInsetsSides.Horizontal))
                         .clipToBounds().testTag("page-${scope.tab}"),
                     // Cards stay inset 20.dp on BOTH sides (start=end=20.dp). The end inset is NOT removed:
@@ -401,7 +408,7 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
         }
         // [H1] The only place WindowInsets are read. Its composition contains the dock call and nothing else,
         // so an IME frame recomposes ~2 composables instead of the page body + four branches.
-        if(!modalOpen)DockOverlay(backdrop=backdrop,policy=policy,selected=scope.tab,onSelect=onSelect,enabled=true,
+        if(!modalOpen)DockOverlay(rendering=rendering,input=glassInput,singleLens=singleLens,selected=scope.tab,onSelect=onSelect,
             onOverlapChange={px->dockOverlap.floatValue=px})
         // Feedback pass: a specific failure now renders as the home "这一步没有完成" card with its own fix buttons
         // (see ui/SignFeedback.kt), so only neutral confirmations still use the transient Snackbar -- one failure no
@@ -506,12 +513,23 @@ private fun onSettingsAction(context:Context,permission:androidx.activity.result
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun BoxScope.DockOverlay(backdrop:PageBackdropState,policy:GlassPolicy,selected:Int,onSelect:(Int)->Unit,enabled:Boolean,onOverlapChange:(Float)->Unit={}) {
-    val density=LocalDensity.current
-    val imeVisible=WindowInsets.isImeVisible
-    val imeBottom=WindowInsets.ime.getBottom(density)
-    if(imeBottom==0&&!imeVisible) {
-        LiquidDock(selected=selected,onSelect=onSelect,backdrop=backdrop,policy=policy,enabled=enabled,onOverlapChange=onOverlapChange,modifier=Modifier.align(Alignment.BottomCenter))
+internal fun BoxScope.DockOverlay(
+    rendering:DockRendering,
+    input:HazeInput.Sources,
+    singleLens:Boolean,
+    selected:Int,
+    onSelect:(Int)->Unit,
+    onOverlapChange:(Float)->Unit={},
+) {
+    val context=LocalContext.current
+    val visible=!WindowInsets.isImeVisible&&WindowInsets.ime.getBottom(LocalDensity.current)==0
+    val advanced=visible&&rendering.mode==GlassQuality.FULL
+    DisposableEffect(context,advanced) {
+        com.glasssign.app.local.ExperimentalUiRecovery.rendering(context,advanced)
+        onDispose{com.glasssign.app.local.ExperimentalUiRecovery.rendering(context,false)}
+    }
+    if(visible) {
+        DockGlass(selected,onSelect,rendering.mode,rendering.motion,input,Modifier.align(Alignment.BottomCenter),onOverlapChange,singleLens)
     }
 }
 
@@ -579,7 +597,7 @@ private fun LazyListScope.AccountsPage(scope:ScopeState,ui:PageUiState,a:Account
         if(ui.accounts.isEmpty())item(key="empty",contentType="empty"){QCard{Text("让账号各自独立",style=MaterialTheme.typography.headlineSmall);Text("点击右上角 +，选择平台后登录。一个账号可管理多个游戏与角色。",color=Muted)}}
         // [H5] bindings grouped once by the caller; the item lambda closes over the ready map.
         items(ui.accounts,key={it.id},contentType={"account"}){account->
-            QAccount(account,bindingsByAccount[account.id].orEmpty()){id->scope.detail=id}
+            QAccount(account,bindingsByAccount[account.id].orEmpty(),providerPaused=account.provider in s.disabledProviders){id->scope.detail=id}
         }
         items(ui.pendingAccounts,key={"pending-${it.id}"},contentType={"pending"}){account->QCard{Text("未完成的绑定 · ${safeLabel(account.nickname)}",overflow=TextOverflow.Ellipsis,maxLines=2);Text("尚未启用签到",color=Muted);TextButton(onClick={vm.verifyAuthorization(account.id)}){Text("继续读取角色")};TextButton(onClick={vm.discardDraft(account.id)}){Text("取消这次绑定")}}}
     } else {
@@ -588,12 +606,13 @@ private fun LazyListScope.AccountsPage(scope:ScopeState,ui:PageUiState,a:Account
 }
 
 private fun LazyListScope.AccountDetailPage(scope:ScopeState,ui:PageUiState,a:Account,vm:VmActions,s:UiState,owned:List<GameBinding>) {
-    item(key="identity",contentType="identity"){QAccount(a,owned,null)}
+    item(key="identity",contentType="identity"){QAccount(a,owned,providerPaused=a.provider in s.disabledProviders,onClick=null)}
     item(key="actions",contentType="actions"){QCard{
         QSwitch("启用此账号签到","关闭后手动与自动队列均跳过",a.enabled){vm.setEnabled(a.id,it)}
         QSwitch("参加每日自动签到","需开启全局计划；关闭后仍可手动签到",a.autoSignEnabled){vm.autoEnabled(a.id,it)}
-        OutlinedButton(onClick={vm.manageGames(a.id)},enabled=!s.loginBusy,modifier=Modifier.fillMaxWidth().heightIn(min=48.dp).testTag("manage-games")){Text("管理游戏与角色")}
-        TextButton(onClick={vm.verifyAccount(a.id)},enabled=!s.loginBusy&&!s.jobRunning&&!s.submitting){Text("验证授权（不签到）")}
+        if(a.provider in s.disabledProviders)Text("平台适配器已暂停，可在设置 → 实验室中恢复。",style=MaterialTheme.typography.bodySmall,color=Muted)
+        OutlinedButton(onClick={vm.manageGames(a.id)},enabled=!s.loginBusy&&a.provider !in s.disabledProviders,modifier=Modifier.fillMaxWidth().heightIn(min=48.dp).testTag("manage-games")){Text("管理游戏与角色")}
+        TextButton(onClick={vm.verifyAccount(a.id)},enabled=!s.loginBusy&&!s.jobRunning&&!s.submitting&&a.provider !in s.disabledProviders){Text("验证授权（不签到）")}
         val own=ui.feedback?.gameRows?.filter{it.accountId==a.id}.orEmpty().ifEmpty{null}
         val done=own?.let{rows->rows.isNotEmpty()&&rows.all{it.state==RowState.COMPLETED}} ?: ui.records.filter{it.accountId==a.id}.let{it.isNotEmpty()&&it.all{r->present(r).group=="success"}}
         Text(
@@ -607,7 +626,7 @@ private fun LazyListScope.AccountDetailPage(scope:ScopeState,ui:PageUiState,a:Ac
         )
         val authProblem=ui.feedback?.authRows?.firstOrNull{it.accountId==a.id}
         if(authProblem!=null)Text("${authProblem.label}：${authProblem.detail}",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error,maxLines=3,overflow=TextOverflow.Ellipsis)
-        Button(onClick={vm.retryAccount(a.id)},enabled=a.enabled&&!s.jobRunning&&!s.submitting&&!s.waitingNetwork,modifier=Modifier.fillMaxWidth().heightIn(min=48.dp)){Text(if(done)"重新检查此账号" else "立即签到")}
+        Button(onClick={vm.retryAccount(a.id)},enabled=a.enabled&&!s.jobRunning&&!s.submitting&&!s.waitingNetwork&&a.provider !in s.disabledProviders,modifier=Modifier.fillMaxWidth().heightIn(min=48.dp)){Text(if(done)"重新检查此账号" else "立即签到")}
     }}
     items(owned,key={it.targetId},contentType={"binding"}){b->QCard{QSwitch(safeLabel(b.name),"${GameCatalog.find(b.gameId)?.title} · 独立角色签到项",b.enabled){vm.bindingEnabled(a.id,b.targetId,it)}}}
     item(key="maintenance",contentType="maintenance"){QCard{
@@ -694,7 +713,7 @@ private fun LazyListScope.SettingsPage(ui:PageUiState,s:UiState,
     onTab:(Int)->Unit) {
     when(section) {
         SettingsSection.HOME -> item(key="settings-hub",contentType="settings-hub") {
-            SettingsHub(if(ui.scheduleEnabled)ui.dailyTime else "未开启",onOpenAppearance,onSection,{onSettings("plugins")})
+            SettingsHub(if(ui.scheduleEnabled)ui.dailyTime else "未开启",onOpenAppearance,onSection)
         }
         SettingsSection.AUTOMATION -> {
             item(key="schedule-summary",contentType="preference") {PreferenceGroup("每日计划") {
@@ -711,6 +730,9 @@ private fun LazyListScope.SettingsPage(ui:PageUiState,s:UiState,
             }}
         }
         SettingsSection.DIAGNOSTICS -> item(key="diagnostics",contentType="preference") {GroupedDiagnostics(s,onRefresh,onSettings)}
+        SettingsSection.LAB -> item(key="labs",contentType="labs") {
+            LabsPage(s,onRefresh,{onSettings("plugins")},{onSection(SettingsSection.DIAGNOSTICS)})
+        }
         SettingsSection.UPDATES -> item(key="updates",contentType="updates") {com.glasssign.app.ui.update.HoshioriUpdateCard()}
         SettingsSection.PRIVACY -> {
             item(key="privacy-details",contentType="preference") {QCard {
@@ -756,7 +778,7 @@ private fun LazyListScope.SettingsPage(ui:PageUiState,s:UiState,
  * the role scope, so game_bindings is authoritative), legacy gameIds with an explicit "尚未确定角色范围"
  * marker when roleScope=false.
  */
-@Composable private fun QAccount(a:Account,bindings:List<GameBinding>,onClick:((String)->Unit)?) {
+@Composable private fun QAccount(a:Account,bindings:List<GameBinding>,providerPaused:Boolean=false,onClick:((String)->Unit)?) {
     val meta=providerMeta(a.provider)
     val valid=a.authState=="valid"
     val summary=remember(a,bindings){accountScopeSummary(a,bindings)}
@@ -768,7 +790,7 @@ private fun LazyListScope.SettingsPage(ui:PageUiState,s:UiState,
     QCard(if(onClick==null)null else {{onClick(a.id)}}) {
         // OVERFLOW at 200% font scale: the title/nickname column takes weight(1f) with ellipsis, and the
         // status word is capped so 2x font cannot squeeze the title down to a single glyph before wrapping.
-        Row(verticalAlignment=Alignment.CenterVertically){ProviderBadge(meta);Spacer(Modifier.width(12.dp));Column(Modifier.weight(1f)){Text(safeLabel(identity.title),style=MaterialTheme.typography.titleMedium,overflow=TextOverflow.Ellipsis,maxLines=1);identity.customNote?.let{Text("备注 · ${safeLabel(it)}",color=Muted,overflow=TextOverflow.Ellipsis,maxLines=1)}};Text(if(!a.enabled)"已暂停" else if(valid)"授权可用" else "需要处理",modifier=Modifier.widthIn(max=SUBLABEL_MAX),style=MaterialTheme.typography.labelLarge,color=if(valid)MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,maxLines=2,overflow=TextOverflow.Ellipsis)}
+        Row(verticalAlignment=Alignment.CenterVertically){ProviderBadge(meta);Spacer(Modifier.width(12.dp));Column(Modifier.weight(1f)){Text(safeLabel(identity.title),style=MaterialTheme.typography.titleMedium,overflow=TextOverflow.Ellipsis,maxLines=1);identity.customNote?.let{Text("备注 · ${safeLabel(it)}",color=Muted,overflow=TextOverflow.Ellipsis,maxLines=1)}};Text(if(providerPaused)"平台已暂停" else if(!a.enabled)"已暂停" else if(valid)"授权可用" else "需要处理",modifier=Modifier.widthIn(max=SUBLABEL_MAX),style=MaterialTheme.typography.labelLarge,color=if(providerPaused||!a.enabled)Muted else if(valid)MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,maxLines=2,overflow=TextOverflow.Ellipsis)}
         identity.platformLine?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=Muted,overflow=TextOverflow.Ellipsis,maxLines=2)}
         // 角色行: 读到角色后，标题之外还有角色才显示汇总；一条角色都没读到时才显示占位符，
         // 因此"标题里已经是那条角色"不会再被同时写成"角色待同步"。

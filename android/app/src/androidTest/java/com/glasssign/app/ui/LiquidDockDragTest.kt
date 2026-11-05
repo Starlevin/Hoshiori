@@ -21,7 +21,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.*
@@ -29,7 +28,7 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * Dock drag tests. Pure Compose (`createComposeRule`): no MainActivity, no ViewModel, no repository, no
+ * Dock drag tests. Isolated Compose content on the Release activity: no
  * account/database access, no clearing of app data, no network.
  *
  * [LiquidDockV070Test] keeps pinning the settled capsule, the hidden-dock semantics, the policy matrix and
@@ -47,7 +46,7 @@ import org.junit.Test
  * the drag" is measured against a real scrollable instead of being claimed from the implementation.
  */
 class LiquidDockDragTest {
-    @get:Rule val rule=createComposeRule()
+    @get:Rule val rule=createReleaseComposeRule()
 
     private val standard=GlassPolicy(blur=true,motion=true,reason="实时背景采样")
     private val light=GlassPolicy(blur=false,motion=true,reason="轻量材质")

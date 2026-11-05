@@ -1,7 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Monochrome layer for the themed-icon (API 33+) path: the asymmetric soft-fold page plus the four-point
+  spark on its upper-right edge, matching `hoshiori_icon_v080_foreground.png`. Pure vector so the system
+  can tint it with the wallpaper palette; no bookmark bar, no bitmap.
+
+  Coordinates are in the same 108-unit artboard as the foreground PNG (the PNG artwork spans roughly
+  x 35..101, y 23..85), so both layers read as one mark. Everything stays inside the visible 72 square.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Page: rounded crown, soft fold taking off the lower-right corner. -->
     <path android:fillColor="#FFFFFFFF" android:fillType="evenOdd"
-        android:pathData="M35,30 Q35,26 39,26 L69,26 Q73,26 73,30 L73,83 L54,71 L35,83 Z M54,35 L49.5,48 L36.5,52.5 L49.5,57 L54,70 L58.5,57 L71.5,52.5 L58.5,48 Z" />
-    <path android:fillColor="#FFFFFFFF" android:pathData="M76,25 L77.5,30 L82.5,31.5 L77.5,33 L76,38 L74.5,33 L69.5,31.5 L74.5,30 Z" />
+        android:pathData="M38,29 Q38,23 44,23 L67,23 Q73,23 73,29 L73,84 L44,68 Q38,65 38,57 Z M74,56 L74,84 L60,72 Q68,70 74,56 Z" />
+    <!-- Upper-right spark sitting on the page edge. -->
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M79,22 L80.6,27.6 L86,29.5 L80.6,31.4 L79,37 L77.4,31.4 L72,29.5 L77.4,27.6 Z" />
 </vector>

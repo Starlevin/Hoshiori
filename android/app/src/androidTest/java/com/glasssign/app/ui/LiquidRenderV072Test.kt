@@ -12,7 +12,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.*
@@ -22,7 +21,7 @@ import org.junit.Test
 import kotlin.math.abs
 
 class LiquidRenderV072Test {
-    @get:Rule val rule=createComposeRule()
+    @get:Rule val rule=createReleaseComposeRule()
 
     @Test fun nativeLensSamplesItsDrawnContentAndKeepsGaussianBlur() {
         assumeTrue(Build.VERSION.SDK_INT>=33)

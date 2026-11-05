@@ -2,6 +2,11 @@
 <resources>
     <color name="glasssign_oled">#04060D</color>
     <color name="glasssign_icon_bg">#0A1020</color>
+    <!-- Launcher plates. `hoshiori_icon_background` follows uiMode (values-night overrides it), the two
+         fixed plates are used by the dark/light activity-alias only. -->
+    <color name="hoshiori_icon_background">#F0F1F7</color>
+    <color name="hoshiori_icon_background_dark">#101525</color>
+    <color name="hoshiori_icon_background_light">#F0F1F7</color>
     <color name="glasssign_cyan">#7FE3FF</color>
     <color name="glasssign_lilac">#C0AEFF</color>
 </resources>

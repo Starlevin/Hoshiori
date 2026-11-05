@@ -1,19 +1,29 @@
 package com.glasssign.app.ui
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.glasssign.app.R
@@ -339,9 +349,45 @@ object HoshioriIcons {
     }
 }
 
+/**
+ * The real brand artwork: the same 1024px / 108-unit artboard PNG the adaptive launcher foreground uses,
+ * drawn over the plate the current icon choice resolves to.
+ *
+ * Drawing that artboard straight into a 36dp box would leave the mark at only 72/108 of the box, so the
+ * artwork is pre-cropped to its 72-unit visible square (once, shared by every call site) and then scaled
+ * up by 108/72 — the same crop the launcher mask applies.
+ */
 @Composable
 internal fun HoshioriBrandMark(modifier:Modifier=Modifier) {
-    Image(painterResource(R.drawable.hoshiori_mark),null,modifier,contentScale=ContentScale.Fit)
+    val pageMode=LocalAppearance.current.mode
+    val systemDark=isSystemInDarkTheme()
+    val dark=LauncherIconPlan.effectiveDark(LocalLauncherIconMode.current,pageMode,systemDark)
+    val artwork=rememberBrandArtworkCrop()
+    Box(modifier.clip(RoundedCornerShape(percent=23)).background(brandPlate(dark)),contentAlignment=Alignment.Center) {
+        artwork?.let{Image(it,null,Modifier.fillMaxSize(),contentScale=ContentScale.Fit)}
+    }
+}
+
+/** Plate of the selected icon; mirrors `hoshiori_icon_background` / `_dark` / `_light`. */
+internal fun brandPlate(dark:Boolean)=Color(if(dark)0xFF101525 else 0xFFF0F1F7)
+
+/**
+ * The 1024px foreground decoded once and cropped to the 72-unit visible square, so every brand mark on
+ * screen shares one bitmap. Null when the drawable cannot be decoded (the plate still shows then).
+ */
+@Composable
+internal fun rememberBrandArtworkCrop():ImageBitmap? {
+    val context=LocalContext.current
+    return remember(context.applicationContext) {
+        runCatching {
+            val bitmap=BitmapFactory.decodeResource(context.resources,R.drawable.hoshiori_icon_v080_foreground)
+            if(bitmap==null)return@runCatching null
+            val side=minOf(bitmap.width,bitmap.height)
+            val visible=(side*72f/108f).toInt()
+            val inset=(side-visible)/2
+            Bitmap.createBitmap(bitmap,inset,inset,visible,visible).asImageBitmap()
+        }.getOrNull()
+    }
 }
 
 @Composable

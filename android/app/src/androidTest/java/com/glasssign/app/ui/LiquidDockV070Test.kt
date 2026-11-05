@@ -12,18 +12,17 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createComposeRule
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 
 /**
- * Dock-only tests. Pure Compose (createComposeRule), no ViewModel, no repository, no network, no device state.
+ * Dock-only tests. Isolated Compose content on the Release activity.
  * These do NOT replace NavigationV070Test (which exercises the real MainActivity); they pin the dock's own
  * contract: capsule travel, hidden-dock accessibility, policy fallbacks and touch targets.
  */
 class LiquidDockV070Test {
-    @get:Rule val rule=createComposeRule()
+    @get:Rule val rule=createReleaseComposeRule()
 
     private val standard=GlassPolicy(blur=true,motion=true,reason="实时背景采样")
     private val light=GlassPolicy(blur=false,motion=true,reason="轻量材质")

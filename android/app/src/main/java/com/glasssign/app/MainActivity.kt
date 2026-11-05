@@ -1,14 +1,22 @@
 package com.glasssign.app
 
 import android.os.Bundle
+import android.app.ActivityManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Rect
+import android.graphics.drawable.AdaptiveIconDrawable
+import android.graphics.drawable.Drawable
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
@@ -37,11 +45,80 @@ class MainActivity:ComponentActivity() {
                 }
             }} else {
                 val vm:HomeViewModel=viewModel()
-                GlassSignTheme(reduceMotion=vm.state.reduceMotion) {Root(vm)}
+                GlassSignTheme(reduceMotion=vm.state.reduceMotion) {
+                    // Inside the theme so the committed appearance/icon values are the ones actually shown;
+                    // keyed on the theme mode and the icon mode only, so it does not re-run per frame.
+                    val themeMode=LocalAppearance.current.mode
+                    val iconMode=LocalLauncherIconMode.current
+                    val systemDark=isSystemInDarkTheme()
+                    LaunchedEffect(themeMode,iconMode,systemDark) {
+                        RecentsLabel.update(this@MainActivity, themeMode, iconMode, systemDark, vm.state.overview?.accounts.orEmpty().count{!it.bindingPending&&it.authState=="valid"})
+                    }
+                    Root(vm)
+                }
             }
         }
     }
 }
+
+/**
+ * Recent-tasks card.
+ *
+ * The launcher icon is switched by activity-alias, which the system's task snapshot does not follow, so the
+ * card is redrawn from the mipmap the current choice resolves to (same pure mapping as the alias). Written
+ * once per theme/icon change, never per frame: [last] short-circuits identical calls.
+ */
+private object RecentsLabel {
+    private const val SIZE_PX = 192
+    private const val DARK_PLATE = 0xFF101525.toInt()
+    private const val LIGHT_PLATE = 0xFFF0F1F7.toInt()
+
+    private var last: String? = null
+
+    fun update(activity: ComponentActivity, pageMode: String, iconMode: LauncherIconMode, systemDark: Boolean, checkedIn: Int) {
+        val entry = LauncherIconPlan.targetOf(iconMode, pageMode)
+        val dark = LauncherIconPlan.effectiveDark(iconMode, pageMode, systemDark)
+        val key = "${entry.name}|$dark|$checkedIn"
+        if (key == last) return
+        // Already on the UI thread: draw only the plate, never recycle a bitmap the system still shows.
+        val bitmap = runCatching { render(activity, entry, dark) }.getOrNull() ?: return
+        runCatching {
+            activity.setTaskDescription(
+                ActivityManager.TaskDescription("星栞", bitmap, if (dark) DARK_PLATE else LIGHT_PLATE),
+            )
+            last = key
+        }
+    }
+
+    private fun render(activity: ComponentActivity, entry: LauncherEntry, dark: Boolean): Bitmap {
+        val drawable: Drawable = ContextCompat.getDrawable(activity, iconResourceId(entry))!!
+        val bitmap = Bitmap.createBitmap(SIZE_PX, SIZE_PX, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(if (dark) DARK_PLATE else LIGHT_PLATE)
+        if (drawable is AdaptiveIconDrawable) {
+            // The adaptive drawable scales its 108-unit artboard itself; only the plate is added here.
+            canvas.save()
+            canvas.clipRect(Rect(0, 0, SIZE_PX, SIZE_PX))
+            drawable.setBounds(0, 0, SIZE_PX, SIZE_PX)
+            drawable.draw(canvas)
+            canvas.restore()
+        } else {
+            // Non-adaptive fallback: centre the visible 72 of 108, matching the adaptive crop.
+            val visible = (SIZE_PX * 72f / 108f).toInt()
+            val inset = (SIZE_PX - visible) / 2
+            drawable.setBounds(inset, inset, inset + visible, inset + visible)
+            drawable.draw(canvas)
+        }
+        return bitmap
+    }
+
+    private fun iconResourceId(entry: LauncherEntry): Int = when (entry) {
+        LauncherEntry.SYSTEM -> R.mipmap.ic_launcher
+        LauncherEntry.DARK -> R.mipmap.ic_launcher_dark
+        LauncherEntry.LIGHT -> R.mipmap.ic_launcher_light
+    }
+}
+
 @Composable private fun Root(vm:HomeViewModel) {
     val context=LocalContext.current
     var replacing by rememberSaveable{mutableStateOf<String?>(null)}

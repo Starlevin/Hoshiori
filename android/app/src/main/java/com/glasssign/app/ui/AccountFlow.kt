@@ -34,6 +34,8 @@ internal fun safeLabel(value:String)=Regex("[0-9]{5,}").replace(value){maskedIde
     var importing by remember{mutableStateOf(false)}
     var json by remember{mutableStateOf("")}
     var error by remember{mutableStateOf<String?>(null)}
+    val providerStates=rememberProviderStates()
+    val pausedProviders=providerStates.filter{!it.enabled}.map{it.manifest.id}.toSet()
     // `GameCatalog.all.filter{...}` ran once per provider row on every recomposition of this sheet (4 rows
     // x a 9-entry list, each producing a throwaway List + joined String). The catalog is a singleton and
     // cannot change at runtime, so the per-provider game titles are computed once per composition scope.
@@ -45,11 +47,12 @@ internal fun safeLabel(value:String)=Regex("[0-9]{5,}").replace(value){maskedIde
             if(provider==null) {
                 Text("同一平台可添加多个独立账号。",color=Muted)
                 Providers.forEach {meta->
-                    OutlinedCard(onClick={provider=meta.id},modifier=Modifier.fillMaxWidth().heightIn(min=48.dp).testTag("platform-${meta.id}")) {
+                    OutlinedCard(onClick={provider=meta.id},enabled=meta.id !in pausedProviders,modifier=Modifier.fillMaxWidth().heightIn(min=48.dp).testTag("platform-${meta.id}")) {
                         Row(Modifier.padding(18.dp),verticalAlignment=Alignment.CenterVertically) {
                             Icon(meta.icon,null,tint=meta.color);Spacer(Modifier.width(16.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(meta.title,style=MaterialTheme.typography.titleMedium,maxLines=1,overflow=TextOverflow.Ellipsis)
+                                if(meta.id in pausedProviders)Text("平台已暂停，请先到实验室启用",style=MaterialTheme.typography.bodySmall,color=Muted)
                                 Text(providerGames[meta.id].orEmpty(),style=MaterialTheme.typography.bodySmall,color=Muted,maxLines=2,overflow=TextOverflow.Ellipsis)
                                 Text(if(meta.id=="tagged")"账号 / 短信登录" else if(LoginPlatforms.supportsLogin(meta.id))"官方网页登录 · 支持本人授权导入" else "仅支持本人授权导入",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.primary,maxLines=1,overflow=TextOverflow.Ellipsis)
                             }
@@ -63,8 +66,9 @@ internal fun safeLabel(value:String)=Regex("[0-9]{5,}").replace(value){maskedIde
                 OutlinedTextField(alias,{alias=it.take(40)},label={Text("账号备注（例如主号 / 小号）")},singleLine=true,modifier=Modifier.fillMaxWidth())
                 Text(if(id=="tagged")"在星栞的账号表单登录；信息仅发送官方账号服务，密码与验证码不保存。" else "登录页使用独立的临时网页会话。请选择本次账号，原账号的已保存授权不会清除。",color=Muted)
                 Text("登录后将显示脱敏身份，再选择游戏与角色。授权成功不代表已经签到。",color=Muted)
-                if(LoginPlatforms.supportsLogin(id))Button(onClick={onLogin(id,alias.ifBlank{meta.title})},enabled=!busy,modifier=Modifier.fillMaxWidth().heightIn(min=50.dp).testTag("login-account")){Text("登录账号")}
-                TextButton(onClick={importing=true},enabled=!busy,modifier=Modifier.heightIn(min=48.dp)){Text("使用本人授权导入")}
+                if(id in pausedProviders)Text("平台已在实验室暂停，请启用后再登录。",style=MaterialTheme.typography.bodySmall,color=Muted)
+                if(LoginPlatforms.supportsLogin(id))Button(onClick={onLogin(id,alias.ifBlank{meta.title})},enabled=!busy&&id !in pausedProviders,modifier=Modifier.fillMaxWidth().heightIn(min=50.dp).testTag("login-account")){Text("登录账号")}
+                TextButton(onClick={importing=true},enabled=!busy&&id !in pausedProviders,modifier=Modifier.heightIn(min=48.dp)){Text("使用本人授权导入")}
                 if(existing==null)TextButton(onClick={provider=null},modifier=Modifier.heightIn(min=48.dp)){Text("重新选择平台")}
             }
         }

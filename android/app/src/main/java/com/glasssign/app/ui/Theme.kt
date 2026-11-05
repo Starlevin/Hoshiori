@@ -468,8 +468,26 @@ fun GlassSignTheme(reduceMotion: Boolean, content: @Composable () -> Unit) {
     // Only the boolean reaches consumers (card alpha in HoshioriScreen), so a mask slider drag does not
     // recompose the page: LocalBackgroundEnabled is a separate, stable-valued CompositionLocal.
     val backgroundEnabled=(backgroundPreview?:backgroundPreferences).enabled
+    val launcherStore=remember(context.applicationContext){LauncherIconStore.open(context.applicationContext)}
+    var launcherMode by remember(launcherStore){mutableStateOf(launcherStore.read())}
+    val launcherListener=remember(launcherStore){SharedPreferences.OnSharedPreferenceChangeListener { _,_->launcherMode=launcherStore.read() }}
+    DisposableEffect(launcherStore,launcherListener) {
+        launcherStore.register(launcherListener)
+        onDispose{launcherStore.unregister(launcherListener)}
+    }
+    val launcherManager=remember(context.applicationContext){LauncherIconManager(PackageManagerSwitcher(context.applicationContext),atomicAliasSwitch(Build.VERSION.SDK_INT))}
+    // The controller is re-created only with the theme, not on every icon change.
+    val launcherController=remember(launcherStore,launcherManager){LauncherIconController(launcherStore,launcherManager)}
+    // The launcher alias is written only from MainActivity: the login/plugin activities and previews also
+    // compose this theme but must never rebind the launcher entry. A no-op when the same choice is cached.
+    val hostIsMainActivity=(context as? Activity)?.javaClass?.name=="com.glasssign.app.MainActivity"
+    LaunchedEffect(hostIsMainActivity,launcherMode,settings.mode,systemDark) {
+        if(hostIsMainActivity)launcherManager.apply(launcherMode,settings.mode,systemDark)
+    }
     CompositionLocalProvider(
         LocalReduceMotion provides reduceMotion,LocalAppearance provides settings,LocalAppearanceController provides controller,LocalDensity provides scaled,
+        LocalLauncherIconMode provides launcherMode,
+        LocalLauncherIconController provides launcherController,
         LocalBackgroundRepository provides backgroundRepository,
         LocalBackgroundPreferences provides backgroundPreferences,
         LocalBackgroundPreview provides backgroundPreview,

@@ -117,5 +117,11 @@ class BootReceiver:BroadcastReceiver() {
     }
 }
 class GlassSignApplication:Application() {
-    override fun onCreate() {super.onCreate();runCatching{SignScheduler(this).restore()}.onFailure{Bootstrap.failed=true}}
+    override fun onCreate() {
+        super.onCreate()
+        runCatching {
+            ExperimentalUiRecovery.install(this,LocalServices.get(this).labs)
+            SignScheduler(this).restore()
+        }.onFailure{Bootstrap.failed=true}
+    }
 }
