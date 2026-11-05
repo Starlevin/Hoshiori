@@ -437,8 +437,9 @@ private fun InstallationBasisNote(state: UpdateUiState) {
 }
 
 @Composable
-private fun PrimaryButton(label: String, icon: ImageVector, tag: String, onClick: () -> Unit) {
+internal fun PrimaryButton(label: String, icon: ImageVector, tag: String, onClick: () -> Unit) {
     Surface(
+        onClick = onClick,
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(tag),
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.primary,
@@ -455,7 +456,6 @@ private fun PrimaryButton(label: String, icon: ImageVector, tag: String, onClick
                 style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier.weight(1f),
             )
-            TextButton(onClick = onClick, modifier = Modifier.testTag("$tag-go")) { Text("继续") }
         }
     }
 }
