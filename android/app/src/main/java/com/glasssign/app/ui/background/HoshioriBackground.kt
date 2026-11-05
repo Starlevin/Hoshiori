@@ -157,11 +157,12 @@ val LocalBackgroundEnabled = staticCompositionLocalOf { false }
 @Composable
 internal fun pageGradientBrush(): Brush {
     val colors = MaterialTheme.colorScheme
-    return remember(colors.primaryContainer, colors.background, colors.secondaryContainer) {
+    val flat = com.glasssign.app.ui.LocalAppearance.current.colorStyle == "neutral" || colors.background == Color.Black
+    return remember(colors.primaryContainer, colors.background, colors.secondaryContainer,flat) {
         // True OLED: a pure-black background means a flat black page, not a tinted
         // gradient. The scheme already makes the containers black in that case, so
         // this is a belt-and-braces flatten, not a second source of truth.
-        if (colors.background == Color.Black) Brush.linearGradient(listOf(Color.Black, Color.Black))
+        if (flat) Brush.linearGradient(listOf(colors.background, colors.background))
         else Brush.linearGradient(
             listOf(colors.primaryContainer.copy(alpha = .38f), colors.background, colors.secondaryContainer.copy(alpha = .18f))
         )

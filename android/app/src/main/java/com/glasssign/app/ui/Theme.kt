@@ -98,6 +98,7 @@ val GlassShape = RoundedCornerShape(18.dp)
 val ChipShape = RoundedCornerShape(999.dp)
 
 val LocalReduceMotion = staticCompositionLocalOf { false }
+internal val LocalReduceMotionAction = staticCompositionLocalOf<((Boolean)->Unit)?> { null }
 
 /**
  * Page wallpaper state for the rest of the UI.

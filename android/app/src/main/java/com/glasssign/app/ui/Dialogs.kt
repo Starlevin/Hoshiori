@@ -596,40 +596,27 @@ fun NoticeDialog(
 
 @Composable
 fun SettingsDialog(
-    scheduleEnabled: Boolean, dailyTime: String, reduceMotion: Boolean, busy: Boolean,
-    onDismiss: () -> Unit, onSave: (Boolean, String) -> Unit, onClear: () -> Unit,
-    onReduceMotion: (Boolean) -> Unit,
+    scheduleEnabled: Boolean, dailyTime: String, busy: Boolean,
+    onDismiss: () -> Unit, onSave: (Boolean, String) -> Unit,
 ) {
-    var appearance by remember { mutableStateOf(false) }
     var enabled by remember { mutableStateOf(scheduleEnabled) }
     var time by remember { mutableStateOf(dailyTime) }
     var error by remember { mutableStateOf<String?>(null) }
-    var confirmClear by remember { mutableStateOf(false) }
-    GlassDialog(title = "本地计划与隐私", subtitle = "数据只在本机 · 无需配置服务器", onDismiss = onDismiss) {
-        TextButton(onClick = { appearance = true }, modifier = Modifier.fillMaxWidth()) { Text("外观与主题", color = Cyan) }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("每日后台签到", color = White, modifier = Modifier.weight(1f))
-            Switch(checked = enabled, onCheckedChange = { enabled = it }, enabled = !busy)
+    GlassDialog(title="每日自动签到",subtitle="保存后应用到本机计划",onDismiss=onDismiss) {
+        Row(verticalAlignment=Alignment.CenterVertically) {
+            Text("每日后台签到",color=White,modifier=Modifier.weight(1f))
+            Switch(checked=enabled,onCheckedChange={enabled=it},enabled=!busy)
         }
-        OutlinedTextField(value = time, onValueChange = { time = it; error = null }, label = { Text("北京时间 HH:mm") }, singleLine = true, colors = fieldColors(), modifier = Modifier.fillMaxWidth())
-        Spacer(Modifier.height(10.dp))
-        Text("Android 会在所选时间后择机联网执行，可能延迟；关机时无法运行，重启联网后补查当天。请在系统设置允许自启动及后台运行。", color = Muted, fontSize = 12.sp)
-        Text("通知权限被拒时仍会保存本地记录。网络恢复由系统调度；不会要求常亮屏幕。", color = Muted, fontSize = 12.sp)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("减少动画", color = White, modifier = Modifier.weight(1f))
-            Switch(checked = reduceMotion, onCheckedChange = onReduceMotion)
-        }
-        error?.let { Text(it, color = Rose) }
-        Button(onClick = {
-            if (!Regex("[0-2][0-9]:[0-5][0-9]").matches(time) || runCatching { java.time.LocalTime.parse(time) }.isFailure) error = "请输入有效时间，例如 08:10"
-            else onSave(enabled, time)
-        }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("保存本地计划") }
-        TextButton(onClick = { if (confirmClear) { onClear(); onDismiss() } else confirmClear = true }, enabled = !busy) {
-            Text(if (confirmClear) "确认清除全部授权并暂停计划" else "清除全部本机授权", color = Rose)
-        }
-        Text("普通登录已支持在官方页面完成；四个平台的实号验证仍待本人逐一确认。", color = Faint, fontSize = 10.sp)
+        OutlinedTextField(value=time,onValueChange={time=it;error=null},
+            label={Text("北京时间 HH:mm")},singleLine=true,colors=fieldColors(),modifier=Modifier.fillMaxWidth())
+        Text("系统会在所选时间后安排执行，可能因网络或电池策略延迟。",color=Muted,fontSize=12.sp)
+        error?.let{Text(it,color=Rose)}
+        Button(onClick={
+            if(!Regex("[0-2][0-9]:[0-5][0-9]").matches(time)||runCatching{java.time.LocalTime.parse(time)}.isFailure)
+                error="请输入有效时间，例如 08:10"
+            else onSave(enabled,time)
+        },enabled=!busy,modifier=Modifier.fillMaxWidth()){Text("保存计划")}
     }
-    if (appearance) AppearanceDialog { appearance = false }
 }
 
 /** The normal login entry lives in ui/LoginFlow.kt; this file keeps the developer import path. */

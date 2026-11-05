@@ -25,7 +25,7 @@ import androidx.compose.ui.unit.dp
 /** Independently implemented theme preferences. FlClash feature mapping is documented in docs. */
 @Immutable
 data class AppearanceSettings(
-    val glassMode:String="standard",val mode:String="system",val pureBlack:Boolean=false,val colorStyle:String="vivid",
+    val glassMode:String="standard",val mode:String="system",val pureBlack:Boolean=false,val colorStyle:String="neutral",
     val seed:Int=0xFF4263C7.toInt(),val dynamicColor:Boolean=false,
     val surfaceEffect:String="none",val navigationTint:Boolean=false,
     val scaleEnabled:Boolean=false,val textScale:Float=1f,val font:String="system",val customColors:List<Int> = emptyList(),
@@ -33,11 +33,22 @@ data class AppearanceSettings(
 
 class AppearanceController(context:Context) {
     private val preferences=context.applicationContext.getSharedPreferences("appearance_v1",Context.MODE_PRIVATE)
+    init {
+        if(preferences.getInt("theme_catalog_version",0)<1) {
+            val wasDefaultBlue=preferences.getString("color_style","vivid")=="vivid" &&
+                preferences.getInt("seed",0xFF4263C7.toInt())==0xFF4263C7.toInt() &&
+                !preferences.getBoolean("dynamic",false)
+            preferences.edit().apply {
+                putInt("theme_catalog_version",1)
+                if(wasDefaultBlue)putString("color_style","neutral")
+            }.apply()
+        }
+    }
     fun read()=AppearanceSettings(
         glassMode=preferences.getString("glass_mode","standard").orEmpty().takeIf{it in listOf("standard","light","off")} ?: "standard",
         mode=preferences.getString("mode","system").orEmpty().takeIf{it in listOf("system","light","dark")} ?: "system",
         pureBlack=preferences.getBoolean("pure_black",false),
-        colorStyle=preferences.getString("color_style","vivid").orEmpty().takeIf{it in listOf("vivid","tinted","soft","monochrome")} ?: "vivid",
+        colorStyle=preferences.getString("color_style","neutral").orEmpty().takeIf{it in listOf("neutral","vivid","tinted","soft","monochrome")} ?: "neutral",
         seed=preferences.getInt("seed",0xFF4263C7.toInt()),dynamicColor=preferences.getBoolean("dynamic",false),
         surfaceEffect=preferences.getString("surface_effect","none").orEmpty().takeIf{it in listOf("none","standard","ultra")} ?: "none",
         navigationTint=preferences.getBoolean("navigation_tint",false),
@@ -155,6 +166,7 @@ private fun repairContrast(color:Color,toward:Color,surfaces:List<Color>,target:
  * math; only onSurfaceVariant and error/onError may be nudged when a combination would fail AA.
  */
 internal fun appearanceScheme(settings:AppearanceSettings,dark:Boolean,wallpaper:ColorScheme?):ColorScheme {
+    if(settings.colorStyle=="neutral")return neutralAppearanceScheme(dark,settings.pureBlack)
     val seed=Color(settings.seed)
     val monochrome=settings.colorStyle=="monochrome"
     val neutral=if(dark)Color(0xFF101114) else Color(0xFFF7F8FC)
@@ -218,102 +230,10 @@ internal fun appearanceScheme(settings:AppearanceSettings,dark:Boolean,wallpaper
 internal fun appearanceFont(settings:AppearanceSettings)=when(settings.font){"sans"->FontFamily.SansSerif;"serif"->FontFamily.Serif;"mono"->FontFamily.Monospace;else->FontFamily.Default}
 
 @Composable
-fun AppearanceDialog(onDismiss:()->Unit) {
-    val settings=LocalAppearance.current
-    val controller=LocalAppearanceController.current
-    fun update(next:AppearanceSettings){controller?.save(next)}
-    var custom by remember(settings.seed){mutableStateOf("#"+settings.seed.toUInt().toString(16).takeLast(6).uppercase())}
-    var customError by remember {mutableStateOf<String?>(null)}
-    // Draft value while the thumb is moving; the preferences are written once, on release. Before this,
-    // every drag pixel ran SharedPreferences.apply() on the main thread, woke the change listener which
-    // ran a full AppearanceController.read() over ~12 keys, and rebuilt the whole ColorScheme — for a
-    // value that is displayed as an integer percentage.
-    var draftScale by remember{mutableStateOf<Float?>(null)}
-    GlassDialog(title="外观与主题",subtitle="即时预览 · 只影响本机界面",onDismiss=onDismiss) {
-        Text("液态玻璃",style=MaterialTheme.typography.titleMedium)
-        ChoiceRows(listOf("standard" to "标准","light" to "轻量","off" to "关闭"),settings.glassMode){update(settings.copy(glassMode=it))}
-        Text("标准使用真实页面背景采样；低内存、省电及辅助功能模式自动回退。",style=MaterialTheme.typography.bodySmall,color=Muted)
-        Text("主题模式",style=MaterialTheme.typography.titleMedium)
-        ChoiceRows(listOf("system" to "跟随系统","light" to "浅色","dark" to "深色"),settings.mode){update(settings.copy(mode=it))}
-        SettingSwitch("OLED 纯黑","深色下无背景页面与卡片使用纯黑；自选图片仍按背景设置显示",settings.pureBlack){update(settings.copy(pureBlack=it))}
-        DividerLine(Modifier.padding(vertical=12.dp))
-        Text("主题色",style=MaterialTheme.typography.titleMedium)
-        if(Build.VERSION.SDK_INT>=31)SettingSwitch("壁纸动态取色","从 Android 系统配色中选择主色",settings.dynamicColor){update(settings.copy(dynamicColor=it))}
-        val swatches=listOf(0xFF4263C7,0xFF7553A8,0xFFB4466D,0xFFB6533F,0xFF9D641F,0xFF24795D,0xFF19757A)
-        // The colour disc stays 32dp; the tap target around it grows to 40dp so the old 32dp row of
-        // seven circles is not the smallest control in the dialog.
-        Row(Modifier.fillMaxWidth().padding(vertical=10.dp),horizontalArrangement=Arrangement.SpaceBetween) {
-            swatches.forEach { argb->
-                val value=argb.toInt()
-                val selected=!settings.dynamicColor&&settings.seed==value
-                Box(Modifier.size(40.dp).clickable{update(settings.copy(seed=value,dynamicColor=false))}
-                    .semantics{contentDescription="主题色 #"+value.toUInt().toString(16).takeLast(6).uppercase()+(if(selected)"，当前已选" else "")},
-                    contentAlignment=Alignment.Center) {
-                    Box(Modifier.size(32.dp).background(Color(value),CircleShape)
-                        .border(if(selected)3.dp else 0.dp,MaterialTheme.colorScheme.onSurface,CircleShape))
-                }
-            }
-        }
-        if(settings.customColors.isNotEmpty()) {
-            Text("最近自定义颜色",style=MaterialTheme.typography.bodySmall,color=Muted)
-            settings.customColors.chunked(7).forEach {row->
-                Row(Modifier.padding(vertical=8.dp),horizontalArrangement=Arrangement.spacedBy(10.dp)) {
-                    row.forEach{value->Box(Modifier.size(38.dp).clickable{update(settings.copy(seed=value,dynamicColor=false))},contentAlignment=Alignment.Center){Box(Modifier.size(28.dp).background(Color(value),CircleShape).border(1.dp,MaterialTheme.colorScheme.outlineVariant,CircleShape))}}
-                }
-            }
-        }
-        Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(value=custom,onValueChange={custom=it.take(7);customError=null},label={Text("自定义色 #RRGGBB")},singleLine=true,modifier=Modifier.weight(1f))
-            TextButton(onClick={
-                val value=custom.removePrefix("#").takeIf{it.matches(Regex("[0-9a-fA-F]{6}"))}?.toLongOrNull(16)
-                if(value==null)customError="请输入 6 位十六进制色值" else update(settings.copy(seed=(0xFF000000L or value).toInt(),dynamicColor=false,customColors=(settings.customColors+(0xFF000000L or value).toInt()).distinct().takeLast(8)))
-            },modifier=Modifier.heightIn(min=48.dp).padding(top=12.dp)){Text("应用")}
-        }
-        customError?.let{Text(it,color=MaterialTheme.colorScheme.error)}
-        RgbColorPicker(settings.seed) { argb ->
-            update(settings.copy(seed=argb,dynamicColor=false,
-                customColors=(settings.customColors+argb).distinct().takeLast(8)))
-        }
-        DividerLine(Modifier.padding(vertical=12.dp))
-        Text("表面层次",style=MaterialTheme.typography.titleMedium)
-        ChoiceRows(listOf("none" to "简洁","standard" to "标准","ultra" to "增强"),settings.surfaceEffect){update(settings.copy(surfaceEffect=it))}
-        Text("对应玻璃效果的静态层次档位。仅改变表面、边框和高光，不启用实时模糊。",style=MaterialTheme.typography.bodySmall,color=Muted)
-        SettingSwitch("导航色彩融合","底部导航使用淡主题色背景",settings.navigationTint){update(settings.copy(navigationTint=it))}
-        DividerLine(Modifier.padding(vertical=12.dp))
-        BackgroundSettingsSection()
-        DividerLine(Modifier.padding(vertical=12.dp))
-        SettingSwitch("自定义文字缩放","关闭时跟随系统字体大小",settings.scaleEnabled){update(settings.copy(scaleEnabled=it))}
-        if(settings.scaleEnabled) {
-            val shown=draftScale?:settings.textScale
-            // Lining/tabular digits keep the three-digit label from changing width mid-drag (proportional
-            // numerals make "88%" narrower than "106%", which reflows the row under the thumb).
-            Text("${(shown*100).toInt()}%",color=Muted,
-                style=MaterialTheme.typography.bodyLarge.copy(fontFeatureSettings="tnum"),
-                modifier=Modifier.semantics{contentDescription="文字缩放 ${(shown*100).toInt()}%"})
-            Slider(value=shown,onValueChange={draftScale=it},onValueChangeFinished={
-                val committed=draftScale;draftScale=null
-                if(committed!=null&&committed!=settings.textScale)update(settings.copy(textScale=committed))
-            },valueRange=.85f..1.4f,steps=10)
-            Text("松手后保存；拖动过程中只更新上面的百分比。",style=MaterialTheme.typography.bodySmall,color=Muted)
-        }
-        Text("字体",style=MaterialTheme.typography.titleMedium)
-        ChoiceRows(listOf("system" to "系统","sans" to "无衬线","serif" to "衬线","mono" to "等宽"),settings.font){update(settings.copy(font=it))}
-        Spacer(Modifier.height(12.dp))
-        Surface(color=MaterialTheme.colorScheme.primaryContainer,shape=GlassShape) {
-            Column(Modifier.padding(16.dp)) {
-                Text("星栞",style=MaterialTheme.typography.titleMedium)
-                Text("主题预览 · 签到结果保存在本机",style=MaterialTheme.typography.bodyMedium)
-            }
-        }
-        Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) {
-            TextButton(onClick={draftScale=null;update(AppearanceSettings())},modifier=Modifier.heightIn(min=48.dp)){Text("恢复默认")}
-            Button(onClick=onDismiss,modifier=Modifier.heightIn(min=48.dp)){Text("完成")}
-        }
-    }
-}
+fun AppearanceDialog(onDismiss:()->Unit) = AppearanceSettingsScreen(onDismiss)
 
 @Composable
-private fun ChoiceRows(options:List<Pair<String,String>>,selected:String,onSelect:(String)->Unit) {
+internal fun ChoiceRows(options:List<Pair<String,String>>,selected:String,onSelect:(String)->Unit) {
     options.chunked(if(options.size==3)3 else 2).forEach { row->
         Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
             row.forEach{(value,label)->FilterChip(selected=selected==value,onClick={onSelect(value)},label={Text(label)},modifier=Modifier.weight(1f).heightIn(min=48.dp))}
@@ -326,7 +246,7 @@ private fun ChoiceRows(options:List<Pair<String,String>>,selected:String,onSelec
  * row is at least a 48dp target. Sizes are unchanged — the row gets taller, the font never gets smaller.
  */
 @Composable
-private fun SettingSwitch(title:String,description:String,checked:Boolean,onChecked:(Boolean)->Unit) {
+internal fun SettingSwitch(title:String,description:String,checked:Boolean,onChecked:(Boolean)->Unit) {
     Row(Modifier.fillMaxWidth().heightIn(min=48.dp).padding(vertical=8.dp),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalAlignment=Alignment.CenterVertically) {
         Column(Modifier.weight(1f)){Text(title,style=MaterialTheme.typography.bodyLarge);Text(description,style=MaterialTheme.typography.bodySmall,color=Muted)}
         Switch(checked=checked,onCheckedChange=onChecked,modifier=Modifier.semantics{contentDescription=title})

@@ -12,8 +12,8 @@ android {
         applicationId = "com.glasssign.app.preview"
         minSdk = 26
         targetSdk = 35
-        versionCode = 19
-        versionName = "0.7.9-preview.1"
+        versionCode = 20
+        versionName = "0.7.9-preview.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         resourceConfigurations += listOf("zh", "en")
     }

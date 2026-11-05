@@ -50,7 +50,7 @@ class AppearanceSchemeV070Test {
 
     /** Every field the Theme.kt `remember` keys on must really be a palette input. */
     @Test fun everyRememberKeyedFieldChangesThePalette() {
-        val base=AppearanceSettings(seed=0xFF4263C7.toInt())
+        val base=AppearanceSettings(seed=0xFF4263C7.toInt(),colorStyle="vivid")
         val reference=palette(appearanceScheme(base,false,null))
         // colourStyle / seed / pureBlack in the light theme.
         assertNotEquals("colorStyle",reference,palette(appearanceScheme(base.copy(colorStyle="tinted"),false,null)))
@@ -78,7 +78,7 @@ class AppearanceSchemeV070Test {
     }
 
     @Test fun wallpaperPaletteOnlyAffectsTheAccentRoles() {
-        val base=AppearanceSettings(seed=0xFF4263C7.toInt())
+        val base=AppearanceSettings(seed=0xFF4263C7.toInt(),colorStyle="vivid")
         val plain=appearanceScheme(base,false,null)
         val dynamic=appearanceScheme(base,false,lightColorScheme(primary=Color(0xFF9D641F),secondary=Color(0xFF7F8C6A)))
         assertNotEquals(plain.primary.toArgb(),dynamic.primary.toArgb())
@@ -103,7 +103,7 @@ class AppearanceSchemeV070Test {
      * customColors} is NECESSARY (changing it does change the palette), so a removed key would fail here.
      */
     @Test fun themeRememberKeysAreExactlyThePaletteInputs() {
-        val base=AppearanceSettings(seed=0xFF4263C7.toInt())
+        val base=AppearanceSettings(seed=0xFF4263C7.toInt(),colorStyle="vivid")
         // Display-only fields must not leak into the palette.
         val reference=palette(appearanceScheme(base,false,null))
         val displayOnly=listOf(

@@ -20,6 +20,7 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.*
@@ -32,6 +33,7 @@ import com.glasssign.app.*
 import com.glasssign.app.data.*
 import com.glasssign.app.local.SignRepository
 import com.glasssign.app.login.PendingLogin
+import kotlinx.coroutines.launch
 import java.time.*
 import java.time.format.DateTimeFormatter
 
@@ -99,6 +101,8 @@ internal class ScopeState {
     /** BindState: the add-account sheet this tab owns. */
     var adding by mutableStateOf(false);var renew by mutableStateOf<String?>(null)
     var appearance by mutableStateOf(false);var plan by mutableStateOf(false)
+    var settingsSection by mutableStateOf(SettingsSection.HOME)
+    var confirmClearAuthorizations by mutableStateOf(false)
     var danger by mutableStateOf<Pair<Account,String>?>(null);var rename by mutableStateOf<Account?>(null)
     var record by mutableStateOf<TimelineRecord?>(null)
     var resultFilter by mutableStateOf("all");var providerFilter by mutableStateOf("all")
@@ -286,6 +290,7 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
     val ui=rememberPageUiState(s,safeAccounts)
 
     val scope=rememberSaveable(saver=ScopeStateSaver){ScopeState()}
+    val settingsNavScope=rememberCoroutineScope()
     val pager=rememberSaveable(saver=Pager.Saver){Pager(LazyListState(),LazyListState(),LazyListState(),LazyListState(),LazyListState())}
     // [H2] `modalOpen` is read from the holder only. It is a plain Boolean `remember`ed on the holder, so
     // unrelated holder writes (a filter chip, a Snackbar) cannot re-evaluate the page/dock branch. The one
@@ -321,7 +326,12 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
     val context=LocalContext.current
     val permission=androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()){}
     LaunchedEffect(s.focusAccountId){s.focusAccountId?.let{scope.tab=1;scope.detail=it;vm.clearFocus()}}
-    androidx.activity.compose.BackHandler(enabled=!modalOpen&&(scope.tab!=0||scope.detail!=null)){if(scope.detail!=null)scope.detail=null else scope.tab=0}
+    androidx.activity.compose.BackHandler(enabled=!modalOpen&&(scope.tab!=0||scope.detail!=null)) {
+        if(scope.tab==3&&scope.settingsSection!=SettingsSection.HOME) {
+            scope.settingsSection=SettingsSection.HOME
+            settingsNavScope.launch{pager.settings.scrollToItem(0)}
+        } else if(scope.detail!=null)scope.detail=null else scope.tab=0
+    }
 
     val vmDeps=remember(vm){VmActions(vm)}
     val onSelect=remember(scope){ { index:Int -> scope.tab=index; scope.detail=null } }
@@ -348,7 +358,9 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
             key(scope.tab,scope.detail) {
                 LazyColumn(
                     state=listState,
-                    modifier=Modifier.fillMaxSize().testTag("page-${scope.tab}"),
+                    modifier=Modifier.fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top+WindowInsetsSides.Horizontal))
+                        .clipToBounds().testTag("page-${scope.tab}"),
                     // Cards stay inset 20.dp on BOTH sides (start=end=20.dp). The end inset is NOT removed:
                     // every card in this list is also a child of this padding, so dropping it would make the
                     // cards touch the screen edge -- a worse bug than the one being fixed. The records filter
@@ -359,16 +371,20 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
                     verticalArrangement=Arrangement.spacedBy(16.dp),
                 ) {
                     item(key="header",contentType="header") {
-                        PageHeader(tab=scope.tab,detail=a,accounts=ui.accounts,ui=ui,onBack={scope.detail=null},onAdd={scope.renew=null;scope.adding=true})
+                        if(scope.tab==3&&scope.settingsSection!=SettingsSection.HOME)SettingsSectionHeader(scope.settingsSection.title) {
+                            scope.settingsSection=SettingsSection.HOME
+                            settingsNavScope.launch{pager.settings.scrollToItem(0)}
+                        } else PageHeader(tab=scope.tab,detail=a,accounts=ui.accounts,ui=ui,onBack={scope.detail=null},onAdd={scope.renew=null;scope.adding=true})
                     }
                     when(scope.tab) {
                         // The onTab lambda routes the baseline's inline `tab=1;detail=null` / `tab=2` jumps.
                         0 -> HomePage(ui,s,vmDeps,onTab={ target -> onSelect(target); if(target==1) scope.detail=null })
                         1 -> AccountsPage(scope,ui,a,vmDeps,s,bindingsByAccount,ownedBindings)
                         2 -> RecordsPage(scope,ui,vmDeps,visibleRecords)
-                        3 -> SettingsPage(ui,s,policy,onOpenAppearance={scope.appearance=true},onOpenPlan={scope.plan=true},
-                            onRefresh={vmDeps.refresh(false)},onSettings=onSettingsAction(context,permission),onTab={ target -> onSelect(target); if(target==1) scope.detail=null },
-                            onSchedule={enabled->vmDeps.saveSchedule(enabled,ui.dailyTime)},onReduceMotion={vmDeps.setReduceMotion(it)})
+                        3 -> SettingsPage(ui,s,section=scope.settingsSection,
+                            onSection={scope.settingsSection=it;settingsNavScope.launch{pager.settings.scrollToItem(0)}},
+                            onClearAuthorizations={scope.confirmClearAuthorizations=true},onOpenAppearance={scope.appearance=true},onOpenPlan={scope.plan=true},
+                            onRefresh={vmDeps.refresh(false)},onSettings=onSettingsAction(context,permission),onTab={ target -> onSelect(target); if(target==1) scope.detail=null })
                     }
                     item(key="end",contentType="end"){Spacer(Modifier.height(12.dp))}
                 }
@@ -386,8 +402,15 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
     }
     if(scope.adding)AddAccountSheet(ui.byId[scope.renew],s.loginBusy,{scope.adding=false},{provider,alias->scope.adding=false;onLogin(provider,alias,scope.renew)},{provider,alias,c->scope.adding=false;vm.beginLogin(provider,alias,c,scope.renew)})
     s.pendingLogin?.let{p->RoleBindingSheet(p,s.loginBusy,vm::togglePendingGame,vm::togglePendingRole,vm::pendingAuto,vm::reviewBinding,vm::confirmLogin,vm::cancelLogin){val original=vm.replacementForPending();vm.cancelLogin();onLogin(p.provider,p.nickname,original)}}
-    if(scope.appearance)AppearanceDialog{scope.appearance=false}
-    if(scope.plan)SettingsDialog(scheduleEnabled=s.scheduleEnabled,dailyTime=s.dailyTime,reduceMotion=s.reduceMotion,busy=s.jobRunning,onDismiss={scope.plan=false},onSave={enabled,time->vm.saveSchedule(enabled,time);scope.plan=false;if(enabled&&android.os.Build.VERSION.SDK_INT>=33)permission.launch(android.Manifest.permission.POST_NOTIFICATIONS)},onClear=vm::clearCredentials,onReduceMotion=vm::setReduceMotion)
+    if(scope.appearance)CompositionLocalProvider(LocalReduceMotionAction provides vm::setReduceMotion) {
+        AppearanceDialog{scope.appearance=false}
+    }
+    if(scope.confirmClearAuthorizations)AlertDialog(onDismissRequest={scope.confirmClearAuthorizations=false},
+        title={Text("清除全部本机授权？")},
+        text={Text("清除授权、暂停自动计划，并清理未完成的绑定草稿。已绑定账号与历史记录保留，之后需要重新登录。")},
+        confirmButton={TextButton(onClick={scope.confirmClearAuthorizations=false;vm.clearCredentials()},enabled=!s.jobRunning){Text("清除授权",color=colors.error)}},
+        dismissButton={TextButton(onClick={scope.confirmClearAuthorizations=false}){Text("取消")}})
+    if(scope.plan)SettingsDialog(scheduleEnabled=s.scheduleEnabled,dailyTime=s.dailyTime,busy=s.jobRunning,onDismiss={scope.plan=false},onSave={enabled,time->vm.saveSchedule(enabled,time);scope.plan=false;if(enabled&&android.os.Build.VERSION.SDK_INT>=33)permission.launch(android.Manifest.permission.POST_NOTIFICATIONS)})
     scope.rename?.let{account->var alias by remember(account.id){mutableStateOf(account.nickname)};AlertDialog(onDismissRequest={scope.rename=null},title={Text("编辑账号备注")},text={OutlinedTextField(alias,{alias=it.take(40)},label={Text("备注")})},confirmButton={TextButton(onClick={vm.rename(account.id,alias);scope.rename=null},enabled=alias.isNotBlank()){Text("保存")}},dismissButton={TextButton(onClick={scope.rename=null}){Text("取消")}})}
     scope.danger?.let{(account,kind)->AlertDialog(onDismissRequest={scope.danger=null},title={Text(when(kind){"revoke"->"解除授权？";"history"->"删除历史明细？";else->"删除账号？"})},text={Text("${providerMeta(account.provider).title} · ${safeLabel(account.nickname)}\n"+when(kind){"revoke"->"仅清除加密授权，保留账号、角色、暂停偏好与历史。";"history"->"只删除该账号历史明细，不删除授权或改变计划。当天提交保护仍保留，未知结果不会重发。";else->"删除此账号及所属角色、授权和全部本机记录。其他账号不受影响。"})},confirmButton={TextButton(onClick={when(kind){"revoke"->vm.revoke(account.id);"history"->vm.clearRecords(account.id);else->{vm.deleteAccount(account.id,account.nickname);scope.detail=null}};scope.danger=null}){Text("确认",color=colors.error)}},dismissButton={TextButton(onClick={scope.danger=null}){Text("取消")}})}
     scope.record?.let{entry->val r=entry.record;val account=ui.byId[r.accountId];val row=remember(entry){rowOf(r)};AlertDialog(onDismissRequest={scope.record=null},title={Text(row.presentation.label)},text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)){Text("${entry.day} · ${safeLabel(account?.nickname.orEmpty())}");Text(safeLabel(r.targetName));Text(row.presentation.source);Text(safeLabel(r.message));Text(recordDiagnostics(r),style=MaterialTheme.typography.bodySmall);Text("开始：${row.started}\n结束 / 最近状态：${row.updated}\n提交尝试：${r.attempts}")}},confirmButton={TextButton(onClick={scope.record=null}){Text("关闭")}},dismissButton={Column{if(account!=null&&entry.day==s.overview?.date)TextButton(onClick={vm.reconcile(account.id,r.targetId);scope.record=null}){Text("校验状态（不提交）")};if(account!=null)TextButton(onClick={scope.record=null;scope.tab=1;scope.detail=account.id}){Text("修复账号")};if(account!=null)TextButton(onClick={runCatching{context.startActivity(Intent(Intent.ACTION_VIEW,android.net.Uri.parse(com.glasssign.app.login.LoginPlatforms.of(account.provider).startUrl)))}}){Text("打开官方页面")}}})}
@@ -400,7 +423,7 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
  * applies a setting, so keep that sheet open to restore its RGB draft across configuration changes.
  */
 private val ScopeStateSaver:Saver<ScopeState,Any> = listSaver(
-    save={v->listOf<Any?>(v.tab,v.detail,v.adding,v.renew,v.resultFilter,v.providerFilter,v.accountFilter,v.gameFilter,v.appearance)},
+    save={v->listOf<Any?>(v.tab,v.detail,v.adding,v.renew,v.resultFilter,v.providerFilter,v.accountFilter,v.gameFilter,v.appearance,v.settingsSection.name)},
     restore={r->ScopeState().apply{
         tab=r.getOrNull(0) as? Int ?: 0
         detail=r.getOrNull(1) as? String
@@ -411,6 +434,7 @@ private val ScopeStateSaver:Saver<ScopeState,Any> = listSaver(
         accountFilter=r.getOrNull(6) as? String ?: "all"
         gameFilter=r.getOrNull(7) as? String ?: "all"
         appearance=r.getOrNull(8) as? Boolean ?: false
+        settingsSection=SettingsSection.entries.firstOrNull{it.name==r.getOrNull(9)} ?: SettingsSection.HOME
     }},
 )
 
@@ -478,7 +502,7 @@ internal fun BoxScope.DockOverlay(backdrop:PageBackdropState,policy:GlassPolicy,
 }
 
 @Composable private fun PageHeader(tab:Int,detail:Account?,accounts:List<Account>,ui:PageUiState,onBack:()->Unit,onAdd:()->Unit) {
-    Row(Modifier.statusBarsPadding().fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
         if(tab==1&&detail!=null)IconButton(onClick=onBack){Icon(Icons.Rounded.ArrowBack,"返回账号列表")}
         Column(Modifier.weight(1f)) {
             Text(when(tab){0->"星栞";1->if(detail==null)"账号" else "账号详情";2->"记录";else->"设置"},style=MaterialTheme.typography.headlineLarge,fontWeight=FontWeight.SemiBold)
@@ -487,7 +511,7 @@ internal fun BoxScope.DockOverlay(backdrop:PageBackdropState,policy:GlassPolicy,
                     0->"今日签到 · ${ui.accounts.size} 个账号"
                     1->if(detail==null)"${accounts.map{it.provider}.distinct().size} 个平台 · ${accounts.size} 个账号 · ${ui.bindings.count{it.enabled&&it.accountId in ui.byId}} 项游戏/角色" else providerMeta(detail.provider).title
                     2->"每次执行都有独立结果"
-                    else->"本机计划 · 运行诊断 · 外观"
+                    else->"偏好、运行与应用管理"
                 },style=MaterialTheme.typography.bodySmall,color=Muted
             )
         }
@@ -641,15 +665,54 @@ private val RETRYABLE=listOf("failed","waiting_network")
     }
 }
 
-private fun LazyListScope.SettingsPage(ui:PageUiState,s:UiState,policy:GlassPolicy,onOpenAppearance:()->Unit,onOpenPlan:()->Unit,onRefresh:()->Unit,onSettings:(String)->Unit,onTab:(Int)->Unit,onSchedule:(Boolean)->Unit,onReduceMotion:(Boolean)->Unit) {
-    item(key="automatic",contentType="automatic"){QCard{Text("自动签到",style=MaterialTheme.typography.titleLarge);QSwitch("每日自动签到","手机本地执行；系统可能延迟",ui.scheduleEnabled){enabled->onSchedule(enabled);onOpenPlan()};TextButton(onClick=onOpenPlan){Text("每日运行偏好 · ${ui.dailyTime}")};Text("本次开始：${if(s.jobRunning)qTime(s.overview?.lastStartedAt) else "当前未执行"}",color=Muted);Text("最近实际执行：${qTime(s.overview?.lastFinishedAt)}",color=Muted);Text("下次预计：${qNext(s)}",color=Muted);TextButton(onClick={onTab(1)}){Text("按账号 / 游戏管理")}}}
-    item(key="diagnostics",contentType="diagnostics"){QDiagnostics(s,policy,onRefresh,onSettings)}
-    item(key="appearance",contentType="appearance"){QCard{Text("外观",style=MaterialTheme.typography.titleLarge);TextButton(onClick=onOpenAppearance,modifier=Modifier.testTag("appearance")){Text("主题与液态玻璃")};QSwitch("减少动效","关闭弹性过渡，同时尊重系统动画设置",s.reduceMotion){onReduceMotion(it)};Text("当前材质：${policy.reason}",style=MaterialTheme.typography.bodySmall,color=Muted)}}
-    item(key="updates",contentType="updates"){com.glasssign.app.ui.update.HoshioriUpdateCard()}
-    item(key="plugins",contentType="plugins"){QCard{Text("插件",style=MaterialTheme.typography.titleLarge);Text("按需下载扩展，核心游戏签到无需安装插件。",style=MaterialTheme.typography.bodyMedium,color=Muted);TextButton(onClick={onSettings("plugins")},modifier=Modifier.testTag("plugin-manager")){Text("插件管理")}}}
-    item(key="privacy",contentType="privacy"){QCard{Text("数据与隐私",style=MaterialTheme.typography.titleLarge);Text("授权通过本机 Keystore 加密。密码、验证码不保存；不需要云服务器。",color=Muted);Text("升级自动迁移本机数据，失败保留原数据与私有检查点。暂不支持跨设备授权备份；卸载或清数据会丢失本机密钥。",style=MaterialTheme.typography.bodySmall,color=Muted);TextButton(onClick={onTab(1)}){Text("授权管理与历史清理")}}}
-    item(key="about",contentType="about"){Text("星栞 Hoshiori ${BuildConfig.VERSION_NAME}\n本机执行 · 无自建服务器\n第三方实号及长期后台表现以实际验收为准",style=MaterialTheme.typography.bodySmall,color=Muted)}
-    item(key="brand",contentType="brand"){HoshioriBrandCard()}
+private fun LazyListScope.SettingsPage(ui:PageUiState,s:UiState,
+    section:SettingsSection,onSection:(SettingsSection)->Unit,onClearAuthorizations:()->Unit,
+    onOpenAppearance:()->Unit,onOpenPlan:()->Unit,onRefresh:()->Unit,onSettings:(String)->Unit,
+    onTab:(Int)->Unit) {
+    when(section) {
+        SettingsSection.HOME -> item(key="settings-hub",contentType="settings-hub") {
+            SettingsHub(if(ui.scheduleEnabled)ui.dailyTime else "未开启",onOpenAppearance,onSection,{onSettings("plugins")})
+        }
+        SettingsSection.AUTOMATION -> {
+            item(key="schedule-summary",contentType="preference") {PreferenceGroup("每日计划") {
+                PreferenceRow("签到时间",if(ui.scheduleEnabled)"每日 ${ui.dailyTime}，由系统安排执行" else "暂未开启自动签到",
+                    HoshioriIcons.Clock,onOpenPlan,if(ui.scheduleEnabled)"已开启" else "未开启")
+                PreferenceDivider()
+                PreferenceRow("参与账号与游戏","独立管理每个账号的签到范围",HoshioriIcons.Accounts,{onTab(1)})
+            }}
+            item(key="schedule-status",contentType="preference") {QCard {
+                Text("最近运行",style=MaterialTheme.typography.titleSmall)
+                Text("最近完成：${qTime(s.overview?.lastFinishedAt)}",color=Muted)
+                Text("下次预计：${qNext(s)}",color=Muted)
+                Text("后台任务可能受系统电池策略影响。",style=MaterialTheme.typography.bodySmall,color=Muted)
+            }}
+        }
+        SettingsSection.DIAGNOSTICS -> item(key="diagnostics",contentType="preference") {GroupedDiagnostics(s,onRefresh,onSettings)}
+        SettingsSection.UPDATES -> item(key="updates",contentType="updates") {com.glasssign.app.ui.update.HoshioriUpdateCard()}
+        SettingsSection.PRIVACY -> {
+            item(key="privacy-details",contentType="preference") {QCard {
+                Text("数据留在此设备",style=MaterialTheme.typography.titleMedium)
+                Text("授权在本机加密保存，密码和验证码不保存。",color=Muted)
+                Text("覆盖升级保留本机数据；卸载会丢失本机密钥。跨设备恢复授权需要重新登录。",style=MaterialTheme.typography.bodySmall,color=Muted)
+            }}
+            item(key="account-privacy",contentType="preference") {PreferenceGroup("账号与授权") {
+                PreferenceRow("管理账号与历史","按账号处理授权和签到记录",HoshioriIcons.Accounts,{onTab(1)})
+            }}
+            item(key="clear-authorizations",contentType="preference") {QCard {
+                Text("重置授权",style=MaterialTheme.typography.titleSmall)
+                Text("仅在需要重新登录全部账号时使用。",color=Muted)
+                TextButton(onClick=onClearAuthorizations,enabled=!s.jobRunning){Text("清除全部本机授权",color=MaterialTheme.colorScheme.error)}
+            }}
+        }
+        SettingsSection.ABOUT -> {
+            item(key="brand",contentType="brand"){HoshioriBrandCard()}
+            item(key="version-info",contentType="preference"){QCard {
+                Text("星栞 Hoshiori",style=MaterialTheme.typography.titleMedium)
+                Text("版本 ${BuildConfig.VERSION_NAME}（${BuildConfig.VERSION_CODE}）",color=Muted)
+                Text("手机本地执行 · 无自建签到服务器",style=MaterialTheme.typography.bodySmall,color=Muted)
+            }}
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
