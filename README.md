@@ -2,9 +2,9 @@
 
 Android 游戏签到工具。一次登录，选择需要绑定的游戏与角色，之后可以手动签到，也可以交给手机的每日计划。账号授权和签到记录保存在本机，无需自建服务器、Root 或 Shizuku。
 
-[下载正式版 v0.7.8](https://github.com/Starlevin/Hoshiori/releases/tag/v0.7.8) · [体验预览版](https://github.com/Starlevin/Hoshiori/releases/tag/v0.7.9-preview.3) · [夸克网盘](https://pan.quark.cn/s/739482783865)
+[下载正式版 v0.7.8](https://github.com/Starlevin/Hoshiori/releases/tag/v0.7.8) · [体验预览版](https://github.com/Starlevin/Hoshiori/releases/tag/v0.7.9-preview.4) · [夸克网盘](https://pan.quark.cn/s/739482783865)
 
-> 当前分支：0.7.9-preview.3。紧凑玻璃 Dock 支持整栏拖动；默认经典黑白，深蓝和柔紫可选。此版本恢复正式包名，可覆盖正式版安装，并加入应用内检查与下载更新。
+> 当前分支：0.7.9-preview.4。紧凑玻璃 Dock 支持整栏拖动；默认经典黑白，深蓝和柔紫可选。此版本恢复正式包名，可覆盖正式版安装，并加入应用内检查与下载更新。
 
 ## 功能
 
@@ -26,7 +26,7 @@ Android 游戏签到工具。一次登录，选择需要绑定的游戏与角色
 
 ## 安装与更新
 
-Android 8.0 及以上。从 0.7.9-preview.3 起，正式版和预览版统一使用包名 `com.glasssign.app` 及同一发布证书，覆盖安装保留原版数据。旧的独立预览包 `com.glasssign.app.preview` 仍是另一个应用，其数据不会跨包名自动合并。
+Android 8.0 及以上。从 0.7.9-preview.4 起，正式版和预览版统一使用包名 `com.glasssign.app` 及同一发布证书，覆盖安装保留原版数据。旧的独立预览包 `com.glasssign.app.preview` 仍是另一个应用，其数据不会跨包名自动合并。
 
 同包名、同签名的安装包可以覆盖更新。请保留原安装，卸载或清除应用存储会丢失本机密钥，需要重新登录。旧 `.debug` 包的数据不会自动迁入正式版。
 
@@ -39,7 +39,7 @@ Android 8.0 及以上。从 0.7.9-preview.3 起，正式版和预览版统一使
 构建 v0.7.8 及当前预览版本需要 JDK 17、Android SDK 36：
 
 ```shell
-git checkout v0.7.9-preview.3
+git checkout v0.7.9-preview.4
 cd android
 # Linux / macOS 首次构建前执行 chmod +x gradlew
 ./gradlew --no-daemon --max-workers=2 :app:assembleRelease :app:testReleaseUnitTest :app:lintRelease
