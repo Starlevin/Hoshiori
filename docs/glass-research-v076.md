@@ -149,7 +149,7 @@ org.jetbrains:annotations:26.1.0
 
 ## 9. v0.7.7 P1：Dock 尺寸/内边距实测化与描边收敛
 
-本轮**只改** `ui/LiquidDock.kt`、`ui/HoshioriScreen.kt` 和两个新增纯 JVM 测试；未改 data/Models/RecordPresentation/Theme/Gradle/Git，未编译、未上机、未做 FPS 测量。
+该版本**只改** `ui/LiquidDock.kt`、`ui/HoshioriScreen.kt` 和两个新增纯 JVM 测试；未改 data/Models/RecordPresentation/Theme/Gradle/Git，未编译、未上机、未做 FPS 测量。
 
 ### 9.1 Dock 实际占位改为实测回传
 

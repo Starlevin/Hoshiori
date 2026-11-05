@@ -6,7 +6,7 @@
 
 ## 资源与生成方式
 
-使用内置`imagegen`生成，未使用CLI或用户API Key。原始PNG保留在本次本地交付的品牌素材目录；应用引用的压缩副本已放入仓库，构建不依赖Codex目录。
+品牌插画使用图像生成工具制作，原始 PNG 与处理记录保存在素材归档中；应用引用的压缩副本已放入仓库，构建所需资源均在仓库内。
 
 - `android/app/src/main/res/drawable-nodpi/hoshiori_mascot_v076.webp`：600×657，透明alpha；原始PNG按比例缩小并编码WebP。
 - `android/app/src/main/res/drawable-nodpi/hoshiori_starfield_v076.webp`：941×1672，静态不透明壁纸。
