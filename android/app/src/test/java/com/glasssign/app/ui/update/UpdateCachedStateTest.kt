@@ -23,8 +23,16 @@ class UpdateCachedStateTest {
     }
 
     @Test fun aCacheFromAnOlderInstalledVersionIsNotReused() {
-        val vm=vm("0.7.8")
-        assertFalse(vm.autoCheck())
-        assertNull(vm.state.value.result)
+        val decision=UpdateAutoCheck.decide(UpdateReleaseChannel.PREVIEW,
+            UpdateCheckMemory(lastCheckMs=1000,cachedVersion="0.7.8"),2000,currentVersion="0.7.9-preview.3")
+        assertTrue(decision is UpdateAutoCheckDecision.Check)
+        assertNull((decision as UpdateAutoCheckDecision.Check).etag)
+    }
+
+    @Test fun anUpgradeStillHonorsTheShortFailureCooldown() {
+        val decision=UpdateAutoCheck.decide(UpdateReleaseChannel.PREVIEW,
+            UpdateCheckMemory(lastCheckMs=1000,cachedVersion="0.7.8",lastAttemptFailed=true),
+            2000,currentVersion="0.7.9-preview.3")
+        assertTrue(decision is UpdateAutoCheckDecision.Throttled)
     }
 }

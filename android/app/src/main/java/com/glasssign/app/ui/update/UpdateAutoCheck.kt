@@ -59,8 +59,11 @@ object UpdateAutoCheck {
         memory: UpdateCheckMemory,
         nowMs: Long,
         intervalMs: Long = INTERVAL_MS,
+        currentVersion: String? = null,
     ): UpdateAutoCheckDecision {
         if (channel == null) return UpdateAutoCheckDecision.Inactive
+        if(!memory.lastAttemptFailed&&currentVersion!=null&&memory.cachedVersion!=null&&
+            currentVersion!=memory.cachedVersion)return UpdateAutoCheckDecision.Check(etag=null)
         if (memory.lastCheckMs <= 0L) return UpdateAutoCheckDecision.Check(etag = null)
         val window = if (memory.lastAttemptFailed) minOf(FAILURE_COOLDOWN_MS, intervalMs) else intervalMs
         val elapsed = nowMs - memory.lastCheckMs

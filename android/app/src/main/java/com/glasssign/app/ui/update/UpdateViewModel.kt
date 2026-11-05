@@ -225,7 +225,7 @@ class UpdateViewModel(
         _state.update { it.copy(autoCheckAttempted = true) }
         val channel = current.releaseChannel ?: return false
         val memory = runCatching { checkStore.read() }.getOrDefault(UpdateCheckMemory())
-        val decision = UpdateAutoCheck.decide(channel, memory, clock())
+        val decision = UpdateAutoCheck.decide(channel, memory, clock(),currentVersion=build.versionName)
         if (decision !is UpdateAutoCheckDecision.Check) {
             restoreCachedResult(memory,channel)
             return false
