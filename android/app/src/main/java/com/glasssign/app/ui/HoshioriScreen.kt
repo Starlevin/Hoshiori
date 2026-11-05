@@ -33,6 +33,8 @@ import com.glasssign.app.*
 import com.glasssign.app.data.*
 import com.glasssign.app.local.SignRepository
 import com.glasssign.app.login.PendingLogin
+import com.glasssign.app.ui.update.UpdateViewModel
+import com.glasssign.app.ui.update.rememberHoshioriUpdateViewModel
 import kotlinx.coroutines.launch
 import java.time.*
 import java.time.format.DateTimeFormatter
@@ -279,6 +281,8 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
 // ---------------------------------------------------------------------------------------------
 
 @Composable fun HoshioriScreen(vm:HomeViewModel,onLogin:(String,String,String?)->Unit) {
+    val updateVm=rememberHoshioriUpdateViewModel()
+    LaunchedEffect(updateVm){updateVm.autoCheck()}
     val s=vm.state
     val density=LocalDensity.current
     val colors=MaterialTheme.colorScheme
@@ -375,6 +379,11 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
                             scope.settingsSection=SettingsSection.HOME
                             settingsNavScope.launch{pager.settings.scrollToItem(0)}
                         } else PageHeader(tab=scope.tab,detail=a,accounts=ui.accounts,ui=ui,onBack={scope.detail=null},onAdd={scope.renew=null;scope.adding=true})
+                        if(scope.tab==0)StartupUpdateNotice(updateVm) {
+                            onSelect(3)
+                            scope.settingsSection=SettingsSection.UPDATES
+                            settingsNavScope.launch{pager.settings.scrollToItem(0)}
+                        }
                     }
                     when(scope.tab) {
                         // The onTab lambda routes the baseline's inline `tab=1;detail=null` / `tab=2` jumps.
@@ -414,6 +423,20 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
     scope.rename?.let{account->var alias by remember(account.id){mutableStateOf(account.nickname)};AlertDialog(onDismissRequest={scope.rename=null},title={Text("编辑账号备注")},text={OutlinedTextField(alias,{alias=it.take(40)},label={Text("备注")})},confirmButton={TextButton(onClick={vm.rename(account.id,alias);scope.rename=null},enabled=alias.isNotBlank()){Text("保存")}},dismissButton={TextButton(onClick={scope.rename=null}){Text("取消")}})}
     scope.danger?.let{(account,kind)->AlertDialog(onDismissRequest={scope.danger=null},title={Text(when(kind){"revoke"->"解除授权？";"history"->"删除历史明细？";else->"删除账号？"})},text={Text("${providerMeta(account.provider).title} · ${safeLabel(account.nickname)}\n"+when(kind){"revoke"->"仅清除加密授权，保留账号、角色、暂停偏好与历史。";"history"->"只删除该账号历史明细，不删除授权或改变计划。当天提交保护仍保留，未知结果不会重发。";else->"删除此账号及所属角色、授权和全部本机记录。其他账号不受影响。"})},confirmButton={TextButton(onClick={when(kind){"revoke"->vm.revoke(account.id);"history"->vm.clearRecords(account.id);else->{vm.deleteAccount(account.id,account.nickname);scope.detail=null}};scope.danger=null}){Text("确认",color=colors.error)}},dismissButton={TextButton(onClick={scope.danger=null}){Text("取消")}})}
     scope.record?.let{entry->val r=entry.record;val account=ui.byId[r.accountId];val row=remember(entry){rowOf(r)};AlertDialog(onDismissRequest={scope.record=null},title={Text(row.presentation.label)},text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)){Text("${entry.day} · ${safeLabel(account?.nickname.orEmpty())}");Text(safeLabel(r.targetName));Text(row.presentation.source);Text(safeLabel(r.message));Text(recordDiagnostics(r),style=MaterialTheme.typography.bodySmall);Text("开始：${row.started}\n结束 / 最近状态：${row.updated}\n提交尝试：${r.attempts}")}},confirmButton={TextButton(onClick={scope.record=null}){Text("关闭")}},dismissButton={Column{if(account!=null&&entry.day==s.overview?.date)TextButton(onClick={vm.reconcile(account.id,r.targetId);scope.record=null}){Text("校验状态（不提交）")};if(account!=null)TextButton(onClick={scope.record=null;scope.tab=1;scope.detail=account.id}){Text("修复账号")};if(account!=null)TextButton(onClick={runCatching{context.startActivity(Intent(Intent.ACTION_VIEW,android.net.Uri.parse(com.glasssign.app.login.LoginPlatforms.of(account.provider).startUrl)))}}){Text("打开官方页面")}}})}
+}
+
+@Composable private fun StartupUpdateNotice(vm:UpdateViewModel,onView:()->Unit) {
+    val state by vm.state.collectAsState()
+    val candidate=state.candidate ?: return
+    if(!state.meta.automatic||!state.meta.shouldNotify)return
+    Spacer(Modifier.height(16.dp))
+    QCard {
+        Text("发现新版本 ${candidate.version}",style=MaterialTheme.typography.titleSmall)
+        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick={vm.dismissNotification();onView()}){Text("查看更新")}
+            TextButton(onClick=vm::dismissNotification){Text("稍后")}
+        }
+    }
 }
 
 /**

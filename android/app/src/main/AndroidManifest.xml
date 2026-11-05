@@ -5,7 +5,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <!-- Optional plugin page (领签 LingQian). Needed to hand a verified APK to the SYSTEM installer
+    <!-- App updates and optional plugins. Hand verified APKs to the SYSTEM installer
          on API 26+. 星栞 never installs silently: the user must additionally grant "install unknown
          apps" in system settings, and the install itself is confirmed on the system page. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
@@ -71,6 +71,15 @@
             <meta-data
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/plugin_download_paths" />
+        </provider>
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updates.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_download_paths" />
         </provider>
     </application>
 

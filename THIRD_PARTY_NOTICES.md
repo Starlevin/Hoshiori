@@ -10,6 +10,8 @@ The standard Android 13+ animated dock directly depends on `io.github.kyant0:bac
 
 The catalog's original continuous-curvature shape dependency, `io.github.kyant0:capsule:2.1.1`, is also directly consumed (Apache-2.0, Kyant). Its full license text is the same Apache-2.0 text packaged above; the capsule attribution is included in NOTICE-backdrop.txt. No replacement capsule geometry is hand-written.
 
+Preview.3 also reduces the selected lens bevel and omits its local Clear draw. The application isolates visible page rendering from the sampled layer to keep page content visible during animated lens playback.
+
 NexioSchedule's AGPL application sources were inspected to identify this upstream pipeline; they are not incorporated. The app remains an Android Compose application and does not import Nexio's business logic or miuix fork.
 
 ## Backdrop — historical fallback optics (v0.7.6)

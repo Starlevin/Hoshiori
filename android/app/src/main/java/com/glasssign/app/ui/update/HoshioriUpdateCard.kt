@@ -21,6 +21,7 @@ import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -30,7 +31,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -39,9 +39,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.glasssign.app.ui.QCard
 
 private const val TAG = "hoshiori-update"
@@ -50,37 +47,50 @@ private const val TAG = "hoshiori-update"
 internal const val QUARK_NOT_PUBLISHED =
     "夸克通道暂未发布：永久目录链接尚未配置，这不是错误，稍后会随新版本提供。"
 
+/** 应用内直下不可用时的固定说法：不伪装成"正在下载"。 */
+internal const val EXTERNAL_ONLY_NOTE =
+    "应用内下载不可用时，只能打开外部渠道手动取回同一版本；外部页面不在星栞内，也不由星栞校验。"
+
 /**
- * 「检查更新」 for 星栞, for the settings page. Self-contained: owns its ViewModel, its network call and
- * its two browser intents, so the host only places it:
+ * 「检查更新」 for 星栞, for the settings page. Self-contained: owns its ViewModel, its network call, its
+ * download and its installer hand-off, so the host only places it:
  *
  * ```
  * HoshioriUpdateCard()
  * ```
  *
- * WHAT IT WILL NOT DO, AND SAYS SO ON SCREEN:
- *  - It never downloads an APK and never installs one. The button opens a browser; the browser saves
- *    the file and the user opens it, after which the SYSTEM installer asks for confirmation.
- *  - It needs no new permission: the metadata read uses the already-declared `INTERNET`, and opening
- *    a browser is a plain `ACTION_VIEW`.
- *  - It never checks on its own. Opening the settings page sends no request; the user presses the
- *    button.
- *  - It never invents a 夸克 link. Without `assets/update-channel.json` configuration the 夸克 chip says
- *    「暂未发布」 and offers nothing.
+ * WHAT IT DOES NOW (and what it still refuses to do):
+ *  - Entering the app starts ONE background check per process, throttled to once per 24 h
+ *    ([UpdateAutoCheck]). There is no request from opening the settings page, and a user who is
+ *    already up to date is never nagged.
+ *  - 「下载安装包」 downloads the official GitHub release asset inside the app, with progress, cancel and
+ *    retry. The bytes land in this app's private `cache/updates/` and nothing else can read them.
+ *  - Before anything is offered to the installer the file is re-measured: size, SHA-256 (when GitHub
+ *    published one), not-HTML, package name, higher versionCode, and the signing certificate must match
+ *    the certificate this app is INSTALLED with.
+ *  - 「安装」 hands that one file to the SYSTEM installer through a `content://` URI. The system shows its
+ *    own confirmation page; 星栞 never installs silently. If "install unknown apps" is off, the system
+ *    settings page is opened instead and the card says so.
+ *  - When in-app download is not possible, the card says so plainly and offers the GitHub release page
+ *    and the 夸克 directory as EXPLICITLY external routes. It never pretends to download from 夸克.
  *
  * BOTH CHANNELS SHARE ONE RELEASE ANSWER: the version, notes and `sha256` shown are always GitHub's
- * official metadata; 夸克 only changes which browser page the button opens.
+ * official metadata; 夸克 only changes which external page a button opens.
  */
 @Composable
 fun HoshioriUpdateCard(modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val vm: UpdateViewModel = viewModel(
-        key = "$TAG-viewmodel",
-        factory = updateViewModelFactory(context),
-    )
+    val vm: UpdateViewModel = rememberHoshioriUpdateViewModel()
     val state by vm.state.collectAsState()
 
-    // One-shot feedback. `report` also covers "no browser on this device".
+    // 兜底：宿主没接启动检查时，进设置页也能查一次。宿主接了就是同一个实例，不会重复请求。
+    LaunchedEffect(Unit) { vm.autoCheck() }
+
+    // 只有"真的有可安装的新版本"时才提示；无更新、检查失败都不打扰。
+    LaunchedEffect(state.meta.automatic, state.meta.shouldNotify, state.candidate?.version?.toString()) {
+        if (state.meta.automatic && state.meta.shouldNotify) vm.markNoticed()
+    }
+
     state.toast?.let { message ->
         LaunchedEffect(message) {
             android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
@@ -91,20 +101,16 @@ fun HoshioriUpdateCard(modifier: Modifier = Modifier) {
     QCard {
         Text("检查更新", style = MaterialTheme.typography.titleLarge)
         Text(
-            "当前版本 ${state.install.versionLabel}（构建 ${state.build.versionCode}${if (state.build.isDebug) " · debug" else ""}）",
+            "当前版本 ${state.install.versionLabel}（构建 ${state.build.versionCode}" +
+                "${if (state.build.isDebug) " · debug" else ""}${channelLabel(state.releaseChannel)}）",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = modifier.testTag("$TAG-version"),
         )
 
-        ChannelRow(
-            state = state,
-            onSelect = vm::selectChannel,
-        )
-
         when (val result = state.result) {
             null -> Text(
-                if (state.busy) "正在读取 GitHub 正式发布信息…" else "手动检查正式版更新，或通过夸克网盘下载。",
+                if (state.busy) "正在读取 GitHub 发布信息…" else idleHint(state),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -114,96 +120,191 @@ fun HoshioriUpdateCard(modifier: Modifier = Modifier) {
                 tint = MaterialTheme.colorScheme.primary,
                 text = result.detail,
             )
-            is UpdateCheck.Failed -> {
-                NoteLine(
-                    icon = iconFor(result.kind),
-                    tint = MaterialTheme.colorScheme.error,
-                    text = result.message,
-                )
-                // The 夸克 directory does not depend on GitHub being reachable. Offer it explicitly
-                // instead of leaving the user with only an error and no route to the new build.
-                if (state.quarkAvailable && state.channel != UpdateChannel.QUARK) {
-                    TextButton(
-                        onClick = { vm.selectChannel(UpdateChannel.QUARK) },
-                        modifier = Modifier.testTag("$TAG-fallback-quark"),
-                    ) { Text("改用夸克通道手动打开") }
-                }
-            }
-        }
-
-        // Debug/release mismatch: stated BEFORE the user spends time downloading a file that cannot
-        // replace this app and cannot share its data.
-        if (state.build.isDebug) {
-            NoteLine(
-                icon = Icons.Rounded.Warning,
-                tint = MaterialTheme.colorScheme.tertiary,
-                text = "当前是 debug 包（${state.build.applicationId}）：正式版应用 ID 为 ${state.install.releaseApplicationId}，" +
-                    "系统把它当作另一个应用，二者不能互相覆盖、不能自动共享本机数据。需要保留数据时请继续使用正式通道安装的版本。",
-            )
-        } else {
-            NoteLine(
-                icon = Icons.Rounded.Info,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                text = "正式版使用同一签名，新的正式 APK 可直接覆盖安装并保留本机数据；不需要卸载。",
+            is UpdateCheck.Failed -> NoteLine(
+                icon = iconFor(result.kind),
+                tint = MaterialTheme.colorScheme.error,
+                text = result.message,
             )
         }
 
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
-                onClick = { vm.check() },
-                enabled = !state.busy,
-                modifier = Modifier.testTag("$TAG-check"),
-            ) {
-                if (state.busy) {
-                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.width(8.dp))
-                    Text("检查中")
-                } else {
-                    Icon(Icons.Rounded.SystemUpdate, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (state.result == null) "检查更新" else "重新检查")
-                }
-            }
+        CheckRow(state = state, onCheck = vm::check, onCancel = vm::cancel)
+
+        // 下载与安装：只有真的存在可安装的新版本、并且通道一致时才出现。
+        if (state.candidate != null) {
+            DownloadBlock(state = state, vm = vm, context = context)
+        }
+
+        ChannelFallback(state = state, onSelect = vm::selectChannel, onOpen = { url -> openExternally(context, url, vm::report) })
+
+        InstallationBasisNote(state = state)
+    }
+}
+
+/** 当前通道与"这份安装属于哪条通道"的一句话说明。 */
+private fun channelLabel(channel: UpdateReleaseChannel?): String = when (channel) {
+    UpdateReleaseChannel.OFFICIAL -> " · 正式通道"
+    UpdateReleaseChannel.PREVIEW -> " · 预览通道"
+    null -> " · 非发布构建"
+}
+
+private fun idleHint(state: UpdateUiState): String = when {
+    state.legacyPreviewNeedsManualInstall ->
+        "这是旧的独立预览包。新版统一装成同一个应用，需要手动换装一次，之后就能在这里直接升级。"
+    state.releaseChannel == null ->
+        "当前构建不是发布版本，这里只提供外部下载入口。"
+    else -> when (val download = state.download) {
+        is UpdateDownloadState.Failed -> download.message
+        else -> "进入应用时会自动检查更新；也可以随时手动检查。"
+    }
+}
+
+/** 检查按钮 + 取消，单一职责，避免与下载按钮抢焦点。 */
+@Composable
+private fun CheckRow(state: UpdateUiState, onCheck: () -> Unit, onCancel: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+            onClick = onCheck,
+            enabled = !state.busy && !state.downloading,
+            modifier = Modifier.testTag("$TAG-check"),
+        ) {
             if (state.busy) {
-                TextButton(onClick = { vm.cancel() }, modifier = Modifier.testTag("$TAG-cancel")) {
-                    Text("取消")
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+                Text("检查中")
+            } else {
+                Icon(Icons.Rounded.SystemUpdate, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(if (state.result == null) "检查更新" else "重新检查")
+            }
+        }
+        if (state.busy) {
+            TextButton(onClick = onCancel, modifier = Modifier.testTag("$TAG-cancel")) { Text("取消") }
+        }
+    }
+}
+
+/** 「下载 / 进度 / 取消 / 重试 / 安装」这一段。 */
+@Composable
+private fun DownloadBlock(state: UpdateUiState, vm: UpdateViewModel, context: Context) {
+    val download = state.download
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        when (download) {
+            is UpdateDownloadState.Running -> {
+                val percent = download.percent
+                Text(
+                    if (percent != null) "正在下载安装包 $percent%（${readableSize(download.bytes)} / ${readableSize(download.total)}）"
+                    else "正在下载安装包（已下载 ${readableSize(download.bytes)}）",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.testTag("$TAG-download-progress"),
+                )
+                if (percent != null) {
+                    LinearProgressIndicator(
+                        progress = { download.bytes.toFloat() / download.total.coerceAtLeast(1L) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
+                TextButton(onClick = vm::cancelDownload, modifier = Modifier.testTag("$TAG-download-cancel")) {
+                    Text("取消下载")
+                }
+            }
+            is UpdateDownloadState.Verified -> {
+                NoteLine(
+                    icon = Icons.Rounded.Info,
+                    tint = MaterialTheme.colorScheme.primary,
+                    text = "安装包已下载并通过校验：${download.versionName} · ${readableSize(download.sizeBytes)} · " +
+                        "SHA-256 ${ReleaseDigest.short(download.sha256)}",
+                )
+                PrimaryButton(
+                    label = "安装 ${download.versionName}",
+                    icon = Icons.Rounded.SystemUpdate,
+                    tag = "$TAG-install",
+                    onClick = {
+                        val message = vm.startInstall()
+                        if (message != null) vm.report(message)
+                    },
+                )
+                Text(
+                    "点击后由系统安装器确认安装；星栞不会静默安装，也不会替你勾选任何选项。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            is UpdateDownloadState.Failed -> {
+                NoteLine(
+                    icon = Icons.Rounded.ErrorOutline,
+                    tint = MaterialTheme.colorScheme.error,
+                    text = download.message,
+                )
+                if (download.retryable) {
+                    TextButton(onClick = vm::startDownload, modifier = Modifier.testTag("$TAG-download-retry")) {
+                        Text("重试下载")
+                    }
+                }
+                // 直链不可达时给出明确的外部渠道，不伪装成应用内下载。
+                state.externalFallback?.let { url ->
+                    TextButton(
+                        onClick = { openExternally(context, url, vm::report) },
+                        modifier = Modifier.testTag("$TAG-external-fallback"),
+                    ) { Text("改用外部渠道打开下载页") }
+                }
+            }
+            UpdateDownloadState.Idle -> {
+                val target = state.downloadTarget
+                if (target is UpdateDownloadTarget.ExternalOnly) {
+                    NoteLine(
+                        icon = Icons.Rounded.Info,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        text = target.reason,
+                    )
+                    target.quarkUrl?.let { url ->
+                        TextButton(
+                            onClick = { openExternally(context, url, vm::report) },
+                            modifier = Modifier.testTag("$TAG-external-quark"),
+                        ) { Text("在浏览器打开夸克目录") }
+                    }
+                } else {
+                    PrimaryButton(
+                        label = "下载安装包（应用内）",
+                        icon = Icons.Rounded.Download,
+                        tag = "$TAG-download",
+                        onClick = vm::startDownload,
+                    )
+                    Text(
+                        "安装包会下载到星栞的应用私有缓存，校验通过后才提供安装按钮。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
-
-        PrimaryAction(state = state, onNeedUrl = vm::requestUrl, onOpen = { url -> openInBrowser(context, url) { vm.report(it) } })
     }
 }
 
 /**
- * The channel selector. Two chips, both fed by the SAME release answer.
- *
- * The 夸克 chip is always visible, even before the owner configures the link: hiding it would make the
- * absence invisible, while showing it with 「暂未发布」 states exactly what is true.
+ * 外部渠道：GitHub 发布页 / 下载页与夸克永久目录。两者都是浏览器行为，文案必须说清楚。
  */
 @Composable
-private fun ChannelRow(state: UpdateUiState, onSelect: (UpdateChannel) -> Unit) {
+private fun ChannelFallback(
+    state: UpdateUiState,
+    onSelect: (UpdateChannel) -> Unit,
+    onOpen: (String) -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
-            "下载通道",
+            "外部渠道",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             UpdateChannel.entries.forEach { channel ->
-                // The 夸克 chip stays clickable even when GitHub cannot be reached: it is the manual
-                // fallback, and disabling it would remove the only working route precisely when the
-                // user needs it.
                 val configured = channel != UpdateChannel.QUARK || state.quarkAvailable
                 FilterChip(
                     selected = state.channel == channel,
                     onClick = { onSelect(channel) },
                     enabled = configured,
-                    label = {
-                        Text(
-                            if (configured) channel.label else "${channel.label} · 暂未发布",
-                        )
-                    },
+                    label = { Text(if (configured) channel.label else "${channel.label} · 暂未发布") },
                     modifier = Modifier.testTag("$TAG-channel-${channel.name.lowercase()}"),
                 )
             }
@@ -218,10 +319,50 @@ private fun ChannelRow(state: UpdateUiState, onSelect: (UpdateChannel) -> Unit) 
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        val url = state.actionUrl
+        val enabled = !state.busy && url != null
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 44.dp)
+                .testTag("$TAG-open-external"),
+            shape = MaterialTheme.shapes.medium,
+            color = if (enabled) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surfaceVariant,
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Icon(Icons.Rounded.Download, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    when {
+                        state.channel == UpdateChannel.QUARK && !state.quarkAvailable -> "夸克通道暂未发布"
+                        state.channel == UpdateChannel.QUARK -> "在浏览器打开夸克目录"
+                        state.candidate != null -> "在浏览器打开 GitHub 下载页"
+                        else -> "暂无可打开的下载页"
+                    },
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                if (enabled) {
+                    TextButton(
+                        onClick = { url?.let(onOpen) },
+                        modifier = Modifier.testTag("$TAG-open"),
+                    ) { Text("打开") }
+                }
+            }
+        }
+        Text(
+            EXTERNAL_ONLY_NOTE,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
-/** The "a newer official version exists" block: version, notes excerpt, digest, size. */
+/** 「a newer official version exists」 block: version, notes excerpt, digest, size. */
 @Composable
 private fun AvailableBlock(state: UpdateUiState, candidate: UpdateCandidate) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -233,7 +374,7 @@ private fun AvailableBlock(state: UpdateUiState, candidate: UpdateCandidate) {
         // The card only ever shows a candidate that [ReleasePolicy] already proved to be newer, so the
         // arrow is unconditional here; the guarded compare lives in the policy, not in the UI.
         Text(
-            "当前 ${state.build.versionName} → 可更新至 ${candidate.version}",
+            "当前 ${state.build.versionName} → 可更新至 ${candidate.version}（${candidate.channel.label}通道）",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -250,10 +391,8 @@ private fun AvailableBlock(state: UpdateUiState, candidate: UpdateCandidate) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        // The digest is GitHub's OWN claim about the published file, not something this app computed:
-        // nothing is downloaded here. Labelled that way so nobody mistakes it for a local verification.
         Text(
-            "GitHub 公布的 SHA-256：${ReleaseDigest.short(candidate.apk.sha256)}",
+            "GitHub 公布的 SHA-256：${ReleaseDigest.short(candidate.apk.sha256)}（下载后会核对）",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -261,63 +400,57 @@ private fun AvailableBlock(state: UpdateUiState, candidate: UpdateCandidate) {
 }
 
 /**
- * The one action button. It opens a browser and nothing else, and it says what will happen *before*
- * the browser appears so the user is never surprised by a download.
+ * 安装依据与限制的固定说明。这段话是产品承诺，不是错误提示，所以永远显示，且措辞不软化。
  */
 @Composable
-private fun PrimaryAction(
-    state: UpdateUiState,
-    onNeedUrl: () -> String?,
-    onOpen: (String) -> Unit,
-) {
-    val label = when {
-        state.channel == UpdateChannel.QUARK && !state.quarkAvailable -> "夸克通道暂未发布"
-        state.channel == UpdateChannel.QUARK -> "在浏览器打开夸克目录"
-        state.candidate != null -> "用浏览器下载正式 APK"
-        else -> "暂无可下载的正式版本"
+private fun InstallationBasisNote(state: UpdateUiState) {
+    when (state.releaseChannel) {
+        UpdateReleaseChannel.PREVIEW -> NoteLine(
+            icon = Icons.Rounded.Info,
+            tint = MaterialTheme.colorScheme.tertiary,
+            text = "当前是预览安装版（${state.build.applicationId}）：只接受同一个预览包名、同一签名、版本更高的 APK；" +
+                "正式版是另一个独立应用，两者不能互相覆盖。",
+        )
+        UpdateReleaseChannel.OFFICIAL -> NoteLine(
+            icon = Icons.Rounded.Info,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            text = "正式版使用同一签名，新的正式 APK 可直接覆盖安装并保留本机数据；不需要卸载。",
+        )
+        null -> NoteLine(
+            icon = Icons.Rounded.Warning,
+            tint = MaterialTheme.colorScheme.tertiary,
+            text = "这是非发布构建（${state.build.applicationId}）：不会从发布通道自动安装任何安装包。",
+        )
     }
-    val enabled = !state.busy && state.actionUrl != null
+    NoteLine(
+        icon = Icons.Rounded.Info,
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        text = UpdateSignatureBasis.BASIS_SENTENCE,
+    )
+}
+
+@Composable
+private fun PrimaryButton(label: String, icon: ImageVector, tag: String, onClick: () -> Unit) {
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .testTag("$TAG-action"),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(tag),
         shape = MaterialTheme.shapes.medium,
-        color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+        color = MaterialTheme.colorScheme.primary,
     ) {
         Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Icon(
-                Icons.Rounded.Download,
-                null,
-                tint = if (enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp),
-            )
+            Icon(icon, null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(20.dp))
             Text(
                 label,
-                color = if (enabled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onPrimary,
                 style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier.weight(1f),
             )
-            if (enabled) {
-                TextButton(
-                    onClick = { onNeedUrl()?.let(onOpen) },
-                    modifier = Modifier.testTag("$TAG-open"),
-                ) { Text("打开") }
-            }
+            TextButton(onClick = onClick, modifier = Modifier.testTag("$tag-go")) { Text("继续") }
         }
     }
-    Text(
-        "只会打开浏览器，不会自动下载或安装：文件由浏览器保存，你确认后再由系统安装器完成安装。",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = 6.dp),
-    )
 }
 
 @Composable
@@ -341,27 +474,28 @@ private fun iconFor(kind: UpdateFailure): ImageVector = when (kind) {
 }
 
 /** "1.2 MB" / "812 KB". A negative or zero size is reported as unknown, never as "0 B". */
-internal fun readableSize(bytes: Long): String = when {
-    bytes <= 0 -> "大小未公布"
-    bytes < 1024 -> "$bytes B"
-    bytes < 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0)
-    else -> String.format(java.util.Locale.US, "%.2f MB", bytes / (1024.0 * 1024.0))
-}
+internal fun readableSize(bytes: Long): String = readableSizeOf(bytes)
 
 /**
- * The only place an Intent leaves this feature. Re-validates the URL, checks that something can
- * answer it, and reports a missing browser instead of crashing.
+ * 唯一一个"离开应用去网页"的地方：重新校验 URL、检查是否有应用能应答，并且在打不开时说明原因，
+ * 而不是崩溃或安静地什么都不做。
  */
-private fun openInBrowser(context: Context, url: String, report: (String) -> Unit) {
+private fun openExternally(context: Context, url: String, report: (String) -> Unit) {
     val intents = UpdateIntents(context)
     val intent = try {
-        if (UpdateUrls.isReleaseApkUrl(url)) intents.openApk(url) else intents.openQuark(url)
+        when {
+            UpdateUrls.isReleaseApkUrl(url) -> intents.openApk(url)
+            UpdateUrls.isReleasePageUrl(url) -> intents.openReleasePage(url)
+            UpdateUrls.isQuarkLink(url) -> intents.openQuark(url)
+            else -> {
+                report("该链接不可打开。")
+                return
+            }
+        }
     } catch (e: IllegalArgumentException) {
         report(e.message ?: "该链接不可打开。")
         return
     }
-    // Android package visibility can hide a browser from resolveActivity while still allowing launch.
-    // Let the system resolve the action and handle ActivityNotFoundException below.
     try {
         context.startActivity(intent)
     } catch (e: ActivityNotFoundException) {
@@ -370,13 +504,3 @@ private fun openInBrowser(context: Context, url: String, report: (String) -> Uni
         report("系统拒绝打开浏览器。")
     }
 }
-
-/** Factory so the host does not need to know how the ViewModel is wired. */
-private fun updateViewModelFactory(context: Context): ViewModelProvider.Factory =
-    object : ViewModelProvider.Factory {
-        @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            val app = context.applicationContext
-            return UpdateViewModel.production(app) as T
-        }
-    }

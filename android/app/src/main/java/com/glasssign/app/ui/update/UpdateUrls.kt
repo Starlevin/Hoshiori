@@ -31,6 +31,19 @@ object ReleaseDigest {
         val hex = hex(raw) ?: return "未提供"
         return hex.take(10) + "…" + hex.takeLast(6)
     }
+
+    /**
+     * Same shortening for a value that may be a bare certificate digest (no `sha256:` prefix).
+     *
+     * Unlike [short], a string of the wrong length is still shortened rather than replaced by
+     * 「未提供」: a certificate fingerprint that came from `PackageManager` is never "missing" just
+     * because it is not 64 hex characters, and showing 「未提供」 there would read as "no signature".
+     */
+    fun shortCerts(raw: String?): String {
+        val text = raw?.trim()?.replace(":", "")?.replace(" ", "")?.lowercase().orEmpty()
+        if (text.isEmpty()) return "未提供"
+        return if (text.length <= 17) text else text.take(10) + "…" + text.takeLast(6)
+    }
 }
 
 /**
@@ -47,8 +60,11 @@ object UpdateUrls {
     const val GITHUB_WEB_HOST = "github.com"
     const val RELEASES_PATH = "/Starlevin/Hoshiori/releases"
 
-    /** The official channel endpoint. One constant, so a test can pin it. */
+    /** 正式通道端点：GitHub 保证这里没有草稿与预发布。 */
     const val LATEST_RELEASE_URL = "https://$GITHUB_API_HOST/repos/Starlevin/Hoshiori/releases/latest"
+
+    /** 预览通道端点：预览发布是 prerelease，只有列表里才有。 */
+    const val RELEASES_LIST_URL = "https://$GITHUB_API_HOST/repos/Starlevin/Hoshiori/releases?per_page=30"
 
     private val HTTPS = Regex("""^https://([A-Za-z0-9.\-]+)(?::(443))?(/[^\s]*)?$""")
 
@@ -87,7 +103,8 @@ object UpdateUrls {
         if (host != GITHUB_WEB_HOST) return false
         if (!path.startsWith(RELEASES_PATH + "/tag/")) return false
         val tag = path.removePrefix(RELEASES_PATH + "/tag/")
-        return tag.isNotEmpty() && !tag.contains('/') && UpdateVersion.parse(tag) != null
+        return tag.isNotEmpty() && !tag.contains('/') &&
+            (UpdateVersion.parse(tag) != null || UpdateVersion.parsePreview(tag) != null)
     }
 
     /** The only host a 夸克 share link may point at. */

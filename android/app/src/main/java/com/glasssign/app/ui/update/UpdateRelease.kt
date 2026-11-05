@@ -33,6 +33,10 @@ data class UpdateRelease(
 /**
  * A release that survived [ReleasePolicy]: a real, non-draft, non-pre-release, strictly-newer
  * semantic version with a downloadable APK that carries a usable `sha256` digest.
+ *
+ * [channel] records WHICH channel accepted it. The card must never hand a preview APK to a release
+ * install (different applicationId, different certificate), so the channel travels with the
+ * candidate instead of being re-guessed at the install button.
  */
 data class UpdateCandidate(
     val version: UpdateVersion,
@@ -42,6 +46,7 @@ data class UpdateCandidate(
     val notes: String?,
     val publishedAt: String?,
     val apk: UpdateAsset,
+    val channel: UpdateReleaseChannel = UpdateReleaseChannel.OFFICIAL,
 )
 
 /** Why the "本次检查没有可用更新" answer was given. Every reason is shown to the user verbatim. */
@@ -99,19 +104,14 @@ enum class UpdateFailure {
 }
 
 /**
- * Everything that decides "is this release the official upgrade?" in one pure function.
+ * 决定「这是不是一个可用的升级」的纯函数，按通道给出不同答案：
  *
- * THE RULES, EACH ONE A REFUSAL RATHER THAN A HINT:
- *  1. `draft == true` — never shown: it is an unpublished draft and half-finished by definition.
- *  2. `prerelease == true` — never shown on the official channel: a beta is not an upgrade.
- *  3. Tag must be a strict semantic version. `nightly`, `v0.8`, `0.8.0-debug` are ignored.
- *  4. Version must be STRICTLY newer than the running build, compared by semver precedence, so a
- *     re-published older release can never trigger a downgrade prompt.
- *  5. The APK must be a real asset. A `*-debug.apk` is refused explicitly (it carries a different
- *     applicationId and cannot share data with a release install); so is a non-`.apk` file.
- *  6. The asset must carry a well-formed SHA-256 digest (GitHub's `digest` field, either
- *     `sha256:<hex>` or bare hex), because the card promises a verifiable download. Without it the
- *     release is reported as unusable instead of being offered silently.
+ * - 草稿永远不算。Tag 必须是严格语义版本。
+ * - 版本必须严格高于当前安装版（含预览序号比较），所以重发的旧版本不会触发降级提示。
+ * - APK 必须是这个通道能装的文件：`*-debug.apk`、非 `.apk` 一律拒绝；正式通道只认不带 `preview`
+ *   的文件名，预览通道只认带 `preview` 的文件名。
+ * - 资源必须带格式正确的 SHA-256 摘要，否则报「资源不完整」而不是悄悄提供。
+ * - 预览通道额外接受「更高的最终正式版」：预览用户可以前进到正式版，反之不行。
  */
 object ReleasePolicy {
 
@@ -126,20 +126,19 @@ object ReleasePolicy {
     fun select(
         currentVersion: String,
         releases: List<UpdateRelease>,
+        channel: UpdateReleaseChannel = UpdateReleaseChannel.OFFICIAL,
     ): Pair<UpdateCandidate?, NoUpdateReason> {
-        // A debug build's own `0.7.6-debug` is accepted here: that is the INSTALLED side, and refusing
-        // it would make the feature unable to check anything in a debug build. The published side stays
-        // strict — see `UpdateVersion.parse`, which rejects a `-debug` tag outright.
+        // The INSTALLED side may be a debug or preview build; the published side stays strict below.
         val current = UpdateVersion.parseInstalled(currentVersion)
             ?: return null to NoUpdateReason.UNREADABLE_PAYLOAD
 
-        // 1+3: strict tag, not draft, not prerelease.
         val parsed = releases.mapNotNull { release ->
             val v = release.version ?: return@mapNotNull null
-            if (release.draft || release.prerelease || !v.isFinal) return@mapNotNull null
+            if (release.draft) return@mapNotNull null
+            if (!channelAcceptsRelease(v, release.prerelease, channel)) return@mapNotNull null
             release to v
         }
-        // 4: strictly newer only. Equal or older releases are not "updates", not even with new notes.
+        // Strictly newer only. Equal or older releases are not "updates", not even with new notes.
         val newer = parsed.filter { (_, v) -> v > current }
         if (newer.isEmpty()) return null to NoUpdateReason.UP_TO_DATE
 
@@ -148,7 +147,7 @@ object ReleasePolicy {
         // version the user must then replace. The card says "有新版本但资源不完整" instead.
         val newest = newer.maxByOrNull { it.second }!!
         val apk = newest.first.assets
-            .filter { isReleaseApk(it.name) }
+            .filter { assetAcceptableFor(it.name, newest.second, channel) }
             .firstOrNull { ReleaseDigest.isWellFormed(it.sha256) }
             ?: return null to NoUpdateReason.MISSING_APK_OR_DIGEST
 
@@ -160,13 +159,43 @@ object ReleasePolicy {
             notes = newest.first.body?.takeIf { it.isNotBlank() },
             publishedAt = newest.first.publishedAt,
             apk = apk,
+            channel = channel,
         ) to NoUpdateReason.UP_TO_DATE
     }
+
+    /**
+     * 这个 release 属于该通道吗？
+     *
+     * 正式通道：只认非 prerelease 的最终版本——beta 不是升级。
+     * 预览通道：认预览版本（`0.8.0-preview.2`，带不带 prerelease 标记都算，GitHub 上这两者常不一致），
+     * 也认最终正式版本（预览用户可以前进到正式版）；`0.8.0-beta.1` 这类别的预发布仍然拒绝。
+     */
+    fun channelAcceptsRelease(version: UpdateVersion, prerelease: Boolean, channel: UpdateReleaseChannel): Boolean =
+        when (channel) {
+            UpdateReleaseChannel.OFFICIAL -> !prerelease && version.isFinal
+            UpdateReleaseChannel.PREVIEW ->
+                if (version.isFinal) true else !prerelease || version.isPreview
+        }
+
+    /**
+     * 预览通道既可以接受带 `preview` 的资源，也可以接受最终正式版的普通资源。
+     *
+     * 预览安装前进到正式版时，那个 release 的资源名不带 `preview`，但它是这条通道合法的终点。
+     */
+    private fun assetAcceptableFor(assetName: String, release: UpdateVersion, channel: UpdateReleaseChannel): Boolean =
+        when (channel) {
+            UpdateReleaseChannel.OFFICIAL -> isReleaseApk(assetName) && !isPreviewAssetName(assetName)
+            UpdateReleaseChannel.PREVIEW -> isReleaseApk(assetName)
+        }
 
     /**
      * `星栞-0.7.6.apk` / `Hoshiori-v0.7.6.apk` are fine; `hoshiori-debug.apk`, `*-debug.apk`,
      * `*.aab`, `*.zip` and `*.apk.sha256` are not. Case-insensitive because release uploads keep
      * whatever the uploader typed.
+     *
+     * A filename containing `preview` marks a preview-channel build. Note that a PREVIEW BUILD of this
+     * app also carries `-debug` in `versionName`, but the release asset must not: the word "debug" in an
+     * asset name means the Android debug build type, which uses another applicationId.
      */
     fun isReleaseApk(name: String): Boolean {
         val n = name.trim().lowercase()
@@ -175,4 +204,16 @@ object ReleasePolicy {
         if (n.contains("unsigned")) return false
         return true
     }
+
+    /** True when the file name itself announces a preview-channel build. */
+    fun isPreviewAssetName(name: String): Boolean =
+        name.trim().lowercase().contains("preview")
+
+    /**
+     * The name check for ONE channel: a preview asset is only acceptable on the preview channel and a
+     * plain asset only on the official channel. The reverse pairing is refused rather than "reported
+     * as incomplete", because it is a real file for a different Android application.
+     */
+    fun isReleaseApkForChannel(name: String, channel: UpdateReleaseChannel): Boolean =
+        isReleaseApk(name) && (isPreviewAssetName(name) == (channel == UpdateReleaseChannel.PREVIEW))
 }

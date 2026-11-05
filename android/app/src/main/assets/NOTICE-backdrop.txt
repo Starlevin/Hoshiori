@@ -8,6 +8,8 @@ accessibility semantics and capability/reduced-motion fallback selection.
 Preview.3 additionally uses a compact lens inset and full-bar horizontal drag
 recognition. Pointer positions update directly; settling and pressure jobs are
 cancelled when superseded. A cancelled drag restores the selected page.
+The selected lens uses a reduced bevel and omits the local Clear draw. The app
+isolates visible page rendering from the layer reused for animated sampling.
 Sources are under ui/upstream/ with individual attribution headers.
 No NexioSchedule application source is included.
 The upstream catalog's shape dependency is consumed unchanged:

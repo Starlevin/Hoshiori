@@ -30,7 +30,8 @@ class LiquidRenderV072Test {
         val optics=OpticalPass()
         rule.setContent {
             Canvas(Modifier.size(160.dp,80.dp).graphicsLayer {
-                renderEffect=optics.effect(size.width,size.height,16*density,8*density,density)
+                renderEffect=optics.effect(size.width,size.height,List(4){16*density},
+                    band=8*density,h=size.height,amount=8*density,density=density,blur=8*density,dispersion=0f)
                 compositingStrategy=CompositingStrategy.Offscreen
             }.testTag("optical-probe")) {
                 for(x in 0 until size.width.toInt() step 4)drawRect(

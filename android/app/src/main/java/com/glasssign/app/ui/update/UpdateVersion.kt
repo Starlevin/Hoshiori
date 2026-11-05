@@ -1,19 +1,11 @@
 package com.glasssign.app.ui.update
 
 /**
- * Strict semantic versions, and nothing else.
+ * 严格语义版本。用严格解析是因为比较结果会变成「有没有新版本」的结论：宽松解析会把 `0.7.10`
+ * 判成小于 `0.7.9`，把 `1.0.0-rc1` 当 `1.0.0`。解析不出来的版本一律不可用，绝不猜。
  *
- * WHY "STRICT" IS THE WHOLE POINT: this card decides whether to tell a user that a newer 星栞 exists.
- * A loose parser (`"0.7.10".substringAfterLast('.') > "0.7.9"` style) happily compares `0.7.10` as
- * smaller than `0.7.9`, accepts `1.0.0-rc1` as `1.0.0`, and turns a typo into a confident wrong
- * answer. So a tag that is not exactly `MAJOR.MINOR.PATCH` (optionally `-pre.release` build) is
- * refused, and anything refused can never win a comparison: an unparseable candidate is not
- * "probably newer", it is unusable and the card says so.
- *
- * ORDERING: semver 2.0.0 precedence. A version WITH a pre-release tag sorts BEFORE the same version
- * without one (`0.8.0-beta` < `0.8.0`); the GitHub/夸克 release channel only ever publishes plain
- * `X.Y.Z` tags, and the pre-release form exists here so the comparison is honest rather than
- * silently treating `0.8.0-beta` as final.
+ * 排序按 semver 2.0.0 优先级：带预发布后缀的排在同名正式版之前（`0.8.0-beta` < `0.8.0`），
+ * 数字标识按数值比较（`preview.10` > `preview.9`）。
  */
 data class UpdateVersion(
     val major: Int,
@@ -24,6 +16,9 @@ data class UpdateVersion(
 
     /** True when this is `X.Y.Z` with no `-...` suffix. */
     val isFinal: Boolean get() = preRelease.isEmpty()
+
+    /** 预览版本：`0.7.9-preview.3`。 */
+    val isPreview: Boolean get() = preRelease.firstOrNull()?.lowercase() == PREVIEW_ID
 
     override fun compareTo(other: UpdateVersion): Int {
         compareValues(major, other.major).let { if (it != 0) return it }
@@ -74,10 +69,47 @@ data class UpdateVersion(
         private val BUILD_FLAVOURS = setOf("debug", "signed", "unsigned", "benchmark", "profile", "release")
 
         /**
+         * The preview channel's identifier in a version name or tag (`preview`, `preview.3`).
+         * `0.7.9-preview.3` is the third preview build of 0.7.9.
+         */
+        const val PREVIEW_ID = "preview"
+
+        /** True when the name marks a preview build (`0.7.9-preview.3`, `v0.8.0-preview`). */
+        fun isPreviewVersionName(name: String?): Boolean {
+            val text = name?.trim()?.lowercase() ?: return false
+            return text.contains("-$PREVIEW_ID") || text.contains(".$PREVIEW_ID")
+        }
+
+        /**
+         * Parses a preview build's version name or tag into a comparable [UpdateVersion].
+         *
+         * `0.7.9-preview.3` → `UpdateVersion(0, 7, 9, ["preview", "3"])`. The numeric tail is the
+         * preview build number, so `-preview.10` sorts above `-preview.9` (numeric, not lexical), and
+         * every preview sorts below the final `0.7.9` — which is exactly why a preview install can
+         * move forward to the final release of the same version.
+         *
+         * Returns `null` for anything that is not `X.Y.Z-preview[.N]`, including a debug build.
+         */
+        fun parsePreview(raw: String?): UpdateVersion? {
+            val text = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            val m = STRICT.matchEntire(text) ?: return null
+            val (a, b, c) = m.destructured
+            val tail = m.groupValues[4]
+            if (tail.isEmpty()) return null
+            val ids = tail.split('.')
+            if (ids.isEmpty() || ids.first().lowercase() != PREVIEW_ID) return null
+            if (ids.drop(1).any { it.isEmpty() || it.toIntOrNull() == null }) return null
+            if (ids.any { it.lowercase() in BUILD_FLAVOURS }) return null
+            return UpdateVersion(a.toInt(), b.toInt(), c.toInt(), listOf(PREVIEW_ID) + ids.drop(1))
+        }
+
+        /**
          * Parses a semantic version, tolerating the leading `v` GitHub uses in tags (`v0.7.6`).
          *
          * Returns `null` for anything that is not a strict semantic version, including `0.7.6-debug`
-         * (this app's own debug `versionName`), `0.7`, `latest` and `0.7.6+build`.
+         * (this app's own debug `versionName`), `0.7`, `latest` and `0.7.6+build`. A preview tag parses
+         * (with its tail) so the preview channel can compare it; whether it is acceptable is decided by
+         * [ReleasePolicy], not here.
          */
         fun parse(raw: String?): UpdateVersion? {
             val text = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
@@ -98,16 +130,13 @@ data class UpdateVersion(
         /**
          * The version to COMPARE for a running build.
          *
-         * ACCEPTS EXACTLY TWO SHAPES, and nothing else:
-         *  1. a plain final `X.Y.Z` (optionally `v`-prefixed), and
-         *  2. a final `X.Y.Z` followed by a real build flavour (`-debug`, `-debug.signed`), which is
-         *     what `BuildConfig.VERSION_NAME` carries in a debug build.
+         * Accepts: a final `X.Y.Z`; a final `X.Y.Z` plus build flavour (`-debug`); and a PREVIEW build
+         * (`0.7.9-preview.3`). A preview is compared by its preview number, so `-preview.10` is newer
+         * than `-preview.9`, and any preview is older than the same final version — a preview install can
+         * therefore move forward to `0.7.9` itself.
          *
-         * ANY OTHER PRE-RELEASE IS REFUSED. This is deliberately stricter than [parse]: a running
-         * install is a shipped artifact, so `0.7.6-whatever`, `0.7.6-rc1` and `0.7.6-beta` are not
-         * valid identifiers for it. Accepting them would let an arbitrary suffix smuggle in a
-         * comparable version, and — because this is the baseline of the update comparison — silently
-         * shift whether a release counts as newer.
+         * Any other pre-release is refused: `0.7.6-whatever`, `0.7.6-rc1` are not identifiers a shipped
+         * install may carry, and accepting them would shift the comparison baseline.
          */
         fun parseInstalled(versionName: String): UpdateVersion? {
             val text = versionName.trim()
@@ -117,17 +146,22 @@ data class UpdateVersion(
                 val (a, b, c) = m.destructured
                 return UpdateVersion(a.toInt(), b.toInt(), c.toInt())
             }
-            // Shape 2: final version + a recognised build flavour only.
+            // Shape 2/3: final version + a tail.
             val dash = text.indexOf('-')
             if (dash <= 0) return null
             val head = text.substring(0, dash)
-            val flavour = text.substring(dash + 1).split('.')
-            if (flavour.isEmpty() || flavour.any { it.isEmpty() }) return null
-            if (flavour.any { it.lowercase() !in BUILD_FLAVOURS }) return null
-            // The head must itself be final; `0.7.6-beta-debug` is not an installed version.
+            val tail = text.substring(dash + 1).split('.')
+            if (tail.isEmpty() || tail.any { it.isEmpty() }) return null
             val m = FINAL_ONLY.matchEntire(head) ?: return null
             val (a, b, c) = m.destructured
-            return UpdateVersion(a.toInt(), b.toInt(), c.toInt())
+            // Build flavour: `0.7.6-debug`, `0.7.6-debug.signed` (`0.7.6-beta-debug` is not one).
+            if (tail.all { it.lowercase() in BUILD_FLAVOURS }) return UpdateVersion(a.toInt(), b.toInt(), c.toInt())
+            // Preview: `0.7.9-preview`, `0.7.9-preview.3` — compared by preview number.
+            val lowered = tail.map { it.lowercase() }
+            if (lowered.firstOrNull() == PREVIEW_ID && lowered.drop(1).all { it.toIntOrNull() != null }) {
+                return UpdateVersion(a.toInt(), b.toInt(), c.toInt(), listOf(PREVIEW_ID) + lowered.drop(1))
+            }
+            return null
         }
     }
 }

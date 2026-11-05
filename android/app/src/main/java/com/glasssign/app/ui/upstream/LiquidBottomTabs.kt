@@ -24,7 +24,8 @@
  *
  * CHANGES FROM UPSTREAM — Hoshiori
  * Configurable theme/height, compact lens inset, full-bar horizontal gestures,
- * direct pointer tracking and cancellation without a page change. The combined
+ * direct pointer tracking, gentler lens bevel, no local Clear draw, and
+ * cancellation without a page change. The combined
  * backdrop, refraction, shadows and continuous capsule rendering are retained.
  */
 package com.kyant.backdrop.catalog.components
@@ -58,7 +59,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
@@ -294,8 +294,8 @@ fun LiquidBottomTabs(
                     effects = {
                         val progress = dampedDragAnimation.pressProgress
                         lens(
-                            10f.dp.toPx() * progress,
-                            14f.dp.toPx() * progress,
+                            6f.dp.toPx() * progress,
+                            8f.dp.toPx() * progress,
                             chromaticAberration = true
                         )
                     },
@@ -320,9 +320,6 @@ fun LiquidBottomTabs(
                         val velocity = dampedDragAnimation.velocity / 10f
                         scaleX /= 1f - (velocity * 0.75f).fastCoerceIn(-0.2f, 0.2f)
                         scaleY *= 1f - (velocity * 0.25f).fastCoerceIn(-0.2f, 0.2f)
-                    },
-                    onDrawBehind = {
-                        drawRect(Color.Red, blendMode = BlendMode.Clear)
                     },
                     onDrawSurface = {
                         val progress = dampedDragAnimation.pressProgress

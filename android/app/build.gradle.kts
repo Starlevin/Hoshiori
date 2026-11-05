@@ -9,7 +9,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.glasssign.app.preview"
+        applicationId = "com.glasssign.app"
         minSdk = 26
         targetSdk = 35
         versionCode = 21
@@ -38,6 +38,7 @@ android {
         compose = true
         buildConfig = true
     }
+    testBuildType = "release"
     testOptions {
         unitTests.isIncludeAndroidResources = true
     }

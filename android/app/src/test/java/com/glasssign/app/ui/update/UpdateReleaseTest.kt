@@ -1,4 +1,4 @@
-package com.glasssign.app.ui.update
+﻿package com.glasssign.app.ui.update
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -61,6 +61,41 @@ class UpdateVersionTest {
         assertNull(UpdateVersion.parseInstalled("0.7"))
     }
 
+    /**
+     * 预览构建的 versionName 是 `0.7.9-preview.3`。必须能解析，否则预览安装永远报「版本号不可解析」；
+     * 而且预览序号要参与比较，`-preview.10` 必须比 `-preview.9` 新。
+     */
+    @Test
+    fun thePreviewBuildsOwnVersionIsComparable() {
+        val p3 = UpdateVersion.parseInstalled("0.7.9-preview.3")!!
+        assertEquals(0, p3.major)
+        assertEquals(7, p3.minor)
+        assertEquals(9, p3.patch)
+        assertTrue(p3.isPreview)
+        assertFalse(p3.isFinal)
+
+        // 序号按数值比较，不是字符串比较。
+        assertTrue(p3 < UpdateVersion.parseInstalled("0.7.9-preview.10")!!)
+        assertTrue(UpdateVersion.parseInstalled("0.7.9-preview.9")!! < UpdateVersion.parseInstalled("0.7.9-preview.10")!!)
+        // 不带序号的预览排在同版本所有带序号的预览之前。
+        assertTrue(UpdateVersion.parseInstalled("0.7.9-preview")!! < p3)
+        // 预览排在最终正式版之前：预览用户可以前进到 0.7.9。
+        assertTrue(p3 < UpdateVersion.parseInstalled("0.7.9")!!)
+
+        assertTrue(UpdateVersion.parseInstalled("v0.7.9-preview.3")!!.isPreview)
+        // 非法标识仍然拒绝。
+        assertNull(UpdateVersion.parseInstalled("0.7.9-preview.x"))
+        assertNull(UpdateVersion.parseInstalled("0.7.9-preview.3.debug"))
+    }
+
+    @Test
+    fun aPreviewTagParsesWithItsTailButIsNotFinal() {
+        val tag = UpdateVersion.parse("v0.8.0-preview.1")!!
+        assertFalse(tag.isFinal)
+        assertTrue(tag.isPreview)
+        assertEquals(listOf("preview", "1"), tag.preRelease)
+    }
+
     @Test
     fun ordersNumericallyNotLexically() {
         // The classic bug: "0.7.10" < "0.7.9" as strings.
@@ -121,6 +156,80 @@ class ReleasePolicyTest {
         assertNotNull(candidate)
         assertEquals("0.7.7", candidate!!.version.toString())
         assertEquals("v0.7.7", candidate.tag)
+    }
+
+    // --- 预览通道 ---------------------------------------------------------------------------------
+
+    /**
+     * 预览通道以前永远查不到东西：`select` 无条件过滤掉 prerelease 与带后缀的版本。
+     * GitHub 上的预览发布基本都标着 prerelease，所以预览安装此前一直被告知「已是最新」。
+     */
+    @Test
+    fun thePreviewChannelFindsAPrereleasePreviewBuild() {
+        val preview = release(
+            "v0.7.9-preview.4",
+            prerelease = true,
+            assets = listOf(apk("v0.7.9-preview.4", name = "Hoshiori-v0.7.9-preview.4.apk")),
+        )
+        val (candidate, _) = ReleasePolicy.select("0.7.9-preview.3", listOf(preview), UpdateReleaseChannel.PREVIEW)
+        assertNotNull(candidate)
+        assertEquals("0.7.9-preview.4", candidate!!.version.toString())
+        assertEquals(UpdateReleaseChannel.PREVIEW, candidate.channel)
+    }
+
+    /** 预览序号参与比较：preview.10 比 preview.9 新。 */
+    @Test
+    fun previewNumbersAreComparedNumerically() {
+        val nine = release("v0.7.9-preview.9", assets = listOf(apk("v0.7.9-preview.9", name = "Hoshiori-v0.7.9-preview.9.apk")))
+        val ten = release("v0.7.9-preview.10", assets = listOf(apk("v0.7.9-preview.10", name = "Hoshiori-v0.7.9-preview.10.apk")))
+        val (candidate, _) = ReleasePolicy.select("0.7.9-preview.9", listOf(nine, ten), UpdateReleaseChannel.PREVIEW)
+        assertEquals("0.7.9-preview.10", candidate!!.version.toString())
+    }
+
+    /** 预览用户可以前进到同版本的最终正式版。 */
+    @Test
+    fun thePreviewChannelAlsoOffersTheFinalRelease() {
+        val final = release("v0.7.9", assets = listOf(apk("v0.7.9", name = "Hoshiori-v0.7.9.apk")))
+        val (candidate, _) = ReleasePolicy.select("0.7.9-preview.3", listOf(final), UpdateReleaseChannel.PREVIEW)
+        assertNotNull(candidate)
+        assertTrue(candidate!!.version.isFinal)
+    }
+
+    /** 正式通道仍然只认最终正式版：预览版本不算升级。 */
+    @Test
+    fun theOfficialChannelStillRefusesPreviewReleases() {
+        val preview = release(
+            "v0.8.0-preview.1",
+            prerelease = true,
+            assets = listOf(apk("v0.8.0-preview.1", name = "Hoshiori-v0.8.0-preview.1.apk")),
+        )
+        val (candidate, _) = ReleasePolicy.select("0.7.9", listOf(preview), UpdateReleaseChannel.OFFICIAL)
+        assertNull(candidate)
+    }
+
+    /** 预览通道也不接受别的预发布（beta）：那不是预览通道发布的产物。 */
+    @Test
+    fun thePreviewChannelStillRefusesOtherPrereleases() {
+        val beta = release(
+            "v0.8.0-beta.1",
+            prerelease = true,
+            assets = listOf(apk("v0.8.0-beta.1", name = "Hoshiori-v0.8.0-beta.1.apk")),
+        )
+        val (candidate, _) = ReleasePolicy.select("0.7.9-preview.3", listOf(beta), UpdateReleaseChannel.PREVIEW)
+        assertNull(candidate)
+    }
+
+    /** 通道与包名解耦：正式包名的预览构建也必须能查到预览发布。 */
+    @Test
+    fun thePreviewChannelIsIndependentOfThePackageName() {
+        val preview = release(
+            "v0.7.9-preview.4",
+            prerelease = true,
+            assets = listOf(apk("v0.7.9-preview.4", name = "Hoshiori-v0.7.9-preview.4.apk")),
+        )
+        val build = UpdateBuildInfo("0.7.9-preview.3", 21, "com.glasssign.app", isDebug = false)
+        val (candidate, _) = ReleasePolicy.select(build.versionName, listOf(preview), build.channel!!)
+        assertNotNull(candidate)
     }
 
     /**

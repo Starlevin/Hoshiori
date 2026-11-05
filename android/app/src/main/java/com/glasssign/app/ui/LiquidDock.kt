@@ -71,7 +71,8 @@ fun Modifier.backdropSource(layer:GraphicsLayer,enabled:Boolean):Modifier=if(!en
     layer.record {this@drawWithContent.drawContent()};drawLayer(layer)
 }
 fun Modifier.backdropSource(state:PageBackdropState):Modifier=if(!state.capture)this else if(state.upstream!=null)
-    layerBackdrop(state.upstream).drawWithContent {
+    // Keep the visible page independent of the RenderNode reused by animated lens sampling.
+    graphicsLayer { compositingStrategy=CompositingStrategy.Offscreen }.layerBackdrop(state.upstream).drawWithContent {
         @Suppress("UNUSED_VARIABLE") val revision=state.captureRevision
         drawContent()
         if(!state.ready&&size.width>0f&&size.height>0f)state.ready=true
