@@ -20,7 +20,7 @@ jobs:
           java-version: '17'
       - uses: android-actions/setup-android@v3
         with:
-          packages: platform-tools platforms;android-37 build-tools;37.0.0
+          packages: platform-tools platforms;android-37.0 build-tools;37.0.0
           log-accepted-android-sdk-licenses: false
       - name: Build, unit tests and lint
         run: |
