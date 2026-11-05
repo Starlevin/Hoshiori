@@ -2,7 +2,9 @@
 
 Android 游戏签到工具。一次登录，选择需要绑定的游戏与角色，之后可以手动签到，也可以交给手机的每日计划。账号授权和签到记录保存在本机，无需自建服务器、Root 或 Shizuku。
 
-[下载正式版 v0.7.8](https://github.com/Starlevin/Hoshiori/releases/tag/v0.7.8) · [体验前端预览版](https://github.com/Starlevin/Hoshiori/releases/tag/v0.7.9-preview.2) · [夸克网盘](https://pan.quark.cn/s/739482783865)
+[下载正式版 v0.7.8](https://github.com/Starlevin/Hoshiori/releases/tag/v0.7.8) · [体验预览版 v0.7.9-preview.5](https://github.com/Starlevin/Hoshiori/releases/tag/v0.7.9-preview.5) · [夸克网盘](https://pan.quark.cn/s/739482783865)
+
+preview.5 提供更紧凑的玻璃 Dock、整栏拖动和应用内下载安装更新，支持覆盖正式版。稳定通道仍为 v0.7.8。
 
 ## 功能
 
@@ -24,9 +26,11 @@ Android 游戏签到工具。一次登录，选择需要绑定的游戏与角色
 
 ## 安装与更新
 
-Android 8.0 及以上。正式版与前端预览版使用不同包名，可以同时安装，账号数据各自独立。
+Android 8.0 及以上。当前预览版与正式版使用相同包名 `com.glasssign.app` 和发布签名，覆盖安装保留本机数据。旧 `.preview` 包仍是独立应用，其数据不会跨包名自动合并。
 
 同包名、同签名的安装包可以覆盖更新。请保留原安装，卸载或清除应用存储会丢失本机密钥，需要重新登录。旧 `.debug` 包的数据不会自动迁入正式版。
+
+preview.5 可在「设置 → 版本与更新」检查、下载并校验 APK，再由 Android 确认安装。浏览器与夸克保留为备用入口。
 
 ## 开发
 
