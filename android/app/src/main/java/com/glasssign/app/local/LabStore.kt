@@ -259,7 +259,7 @@ class LabStore(
             ExperimentalFlag(
                 id = FLAG_WATER_DROP_GLASS,
                 title = "Liquid Glass 2.0",
-                description = "Haze 完整模式支持动态折射、融合与分离。",
+                description = "Haze 完整模式支持动态折射和单颗水珠变形。",
                 risk = "较新 GPU 表现更好；低端机可能掉帧。签到功能不受影响。",
                 defaultEnabled = false,
                 rollbackHint = "关闭后立即回到当前的 Dock 材质；不删除账号、授权、角色或签到记录",

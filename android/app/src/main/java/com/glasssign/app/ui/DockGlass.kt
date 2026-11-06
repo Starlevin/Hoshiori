@@ -19,11 +19,9 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -35,7 +33,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,7 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -56,7 +53,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -64,12 +60,10 @@ import androidx.compose.ui.unit.sp
 import com.glasssign.app.local.GlassQuality
 import dev.chrisbanes.haze.HazeInput
 import dev.chrisbanes.haze.HazePerformanceMode
-import dev.chrisbanes.haze.glass.GlassMemberTransition
 import dev.chrisbanes.haze.glass.GlassStyle
 import dev.chrisbanes.haze.glass.OpticalSizeValue
 import dev.chrisbanes.haze.glass.RefractionProfile
 import dev.chrisbanes.haze.glass.hazeGlass
-import dev.chrisbanes.haze.glass.hazeGlassContainer
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -82,8 +76,6 @@ private val LensShape = RoundedCornerShape(50)
 private val TrackPadding = 5.dp
 private val LensGap = 2.dp
 private val LensInset = 5.dp
-private val LiftRoom = 22.dp
-private val MergeDistance = 30.dp
 
 @Composable
 internal fun DockGlass(
@@ -94,27 +86,29 @@ internal fun DockGlass(
     input: HazeInput.Sources?,
     modifier: Modifier = Modifier,
     onOverlapChange: (Float) -> Unit = {},
-    singleLens: Boolean = false,
 ) {
     val scheme = MaterialTheme.colorScheme
     val density = LocalDensity.current
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val height = liquidDockHeight(density.fontScale) + 4.dp
     val full = mode == GlassQuality.FULL && input != null
-    val combine = full && !singleLens
     val movement = remember(motion) {
         if (motion) spring<Float>(dampingRatio = .84f, stiffness = Spring.StiffnessMedium) else snap()
     }
-    val active = animateFloatAsState(selected.toFloat(), movement, label = "selected-dock-slot")
-    val rebound = remember { Animatable(selected.toFloat()) }
+    val active = remember { Animatable(selected.toFloat()) }
     val scope = rememberCoroutineScope()
     var draggedSlot by remember { mutableStateOf<Float?>(null) }
-    var reboundTarget by remember { mutableStateOf<Int?>(null) }
+    var dragging by remember { mutableStateOf(false) }
     var settleJob by remember { mutableStateOf<Job?>(null) }
     val pressSignals = remember { MutableInteractionSource() }
     val pressing by pressSignals.collectIsPressedAsState()
     val pressed = full && motion && pressing
     val pressScale = animateFloatAsState(if (pressed) .98f else 1f, movement, label = "glass-press-size")
+    val dragStretch = animateFloatAsState(
+        if (full && motion && dragging) 1f else 0f,
+        movement,
+        label = "glass-drag-stretch",
+    )
     val currentSelect by rememberUpdatedState(onSelect)
     val currentSelected by rememberUpdatedState(selected)
 
@@ -122,24 +116,24 @@ internal fun DockGlass(
         settleJob?.cancel()
         settleJob = null
         draggedSlot = null
-        reboundTarget = null
+        dragging = false
     }
 
     fun settle(target: Int) {
         val release = draggedSlot ?: return
         settleJob?.cancel()
         settleJob = scope.launch {
-            rebound.snapTo(release)
-            reboundTarget = target
+            active.snapTo(release)
             draggedSlot = null
+            dragging = false
             if (target != currentSelected) currentSelect(target)
-            rebound.animateTo(target.toFloat(), movement)
-            reboundTarget = null
+            else active.animateTo(target.toFloat(), movement)
         }
     }
 
     LaunchedEffect(selected, motion, mode) {
-        if (!motion || reboundTarget?.let { it != selected } == true) resetDrag()
+        if (!motion) resetDrag()
+        if (draggedSlot == null) active.animateTo(selected.toFloat(), movement)
     }
 
     Box(
@@ -148,7 +142,7 @@ internal fun DockGlass(
         contentAlignment = Alignment.BottomCenter,
     ) {
         BoxWithConstraints(
-            Modifier.widthIn(max = GlassTokens.maxWidth).fillMaxWidth().height(height + LiftRoom)
+            Modifier.widthIn(max = GlassTokens.maxWidth).fillMaxWidth().height(height)
                 .testTag("floating-dock").selectableGroup(),
         ) {
             val cell = (maxWidth - TrackPadding * 2) / DockSlots
@@ -160,40 +154,12 @@ internal fun DockGlass(
             val shell = if (navTint) scheme.surfaceContainerHigh else scheme.surface
             val lensFill = if (navTint) scheme.secondaryContainer else scheme.surfaceContainerHighest
 
-            fun travellingSlot(): Float = draggedSlot ?: if (reboundTarget != null) rebound.value else active.value
-
-            fun lensOffset(travelling: Boolean, lift: Boolean): Modifier =
-                Modifier.align(Alignment.BottomStart).offset {
-                    val slot = clampWaterDropSlot(if (travelling) travellingSlot() else active.value)
-                    val separation = abs(slot - active.value)
-                    val rise = if (lift) LiftRoom * (separation / .95f).coerceIn(0f, 1f) else 0.dp
-                    IntOffset((TrackPadding + LensGap + cell * slot).roundToPx(), -(LensInset + rise).roundToPx())
-                }.size(lensWidth, lensHeight)
-
-            if (full) {
-                val material = rememberDockGlassStyle(lens = true, pressed = pressed)
+            val lensMaterial = if (full) {
+                val material = rememberDockGlassStyle(lens = true, pressed = pressed, moving = dragging)
                 val baseMaterial = rememberDockGlassStyle(lens = false)
-                val press = pressSignals.takeIf { motion }
-                val hasCompanion = combine && (draggedSlot != null || reboundTarget != null)
                 Box(dockBase.hazeGlass(input, baseMaterial, HazePerformanceMode.Default))
-                Box(
-                    Modifier.fillMaxSize().testTag("waterdrop-dock").then(
-                        if (combine) Modifier.hazeGlassContainer(mergeDistance = MergeDistance) else Modifier,
-                    ),
-                ) {
-                    Box(
-                        lensOffset(travelling = !combine, lift = false).glassPressSize(pressScale).testTag("selected-capsule")
-                            .hazeGlass(input, material, HazePerformanceMode.Default, interactionSource = press,
-                                memberTransition = GlassMemberTransition.None),
-                    )
-                    if (hasCompanion) {
-                        Box(
-                            lensOffset(travelling = true, lift = true).glassPressSize(pressScale).testTag("waterdrop-follower")
-                                .hazeGlass(input, material, HazePerformanceMode.Default, interactionSource = press,
-                                    memberTransition = GlassMemberTransition.None),
-                        )
-                    }
-                }
+                Modifier.hazeGlass(input, material, HazePerformanceMode.Default,
+                    interactionSource = pressSignals.takeIf { motion })
             } else {
                 val lite = mode != GlassQuality.OFF
                 Box(
@@ -201,13 +167,34 @@ internal fun DockGlass(
                         .border(1.dp, scheme.outlineVariant.copy(alpha = .65f), ShellShape)
                         .testTag(if (lite) "dock-glass-lite" else "dock-glass-off"),
                 )
-                Box(lensOffset(travelling = true, lift = false).background(lensFill, LensShape).testTag("selected-capsule"))
+                Modifier.background(lensFill, LensShape)
+            }
+
+            Layout(
+                modifier = dockBase.then(if (full) Modifier.testTag("waterdrop-dock") else Modifier),
+                content = { Box(Modifier.testTag("selected-capsule").then(lensMaterial)) },
+            ) { children, constraints ->
+                val trackWidth = constraints.maxWidth
+                val trackHeight = constraints.maxHeight
+                val slot = clampWaterDropSlot(draggedSlot ?: active.value)
+                // Measure the single lens at its actual size. Its label positions stay on the fixed grid.
+                val stretch = if (full && motion) maxOf(dragStretch.value, abs(active.velocity) / 7f).coerceIn(0f, 1f) else 0f
+                val width = (lensWidth.toPx() * (1f + .24f * stretch) * pressScale.value)
+                    .roundToInt().coerceIn(0, trackWidth)
+                val heightPx = (lensHeight.toPx() * (1f + .07f * stretch) * pressScale.value)
+                    .roundToInt().coerceIn(0, trackHeight)
+                val center = TrackPadding.toPx() + cellPx * (slot + .5f)
+                val start = (center - width / 2f).roundToInt().coerceIn(0, trackWidth - width)
+                val lens = children.single().measure(Constraints.fixed(width, heightPx))
+                layout(trackWidth, trackHeight) {
+                    lens.placeRelative(start, (trackHeight - heightPx) / 2)
+                }
             }
 
             Row(
                 dockBase.padding(horizontal = TrackPadding).dockDrag(
                     motion, selected, cellPx, rtl,
-                    onStart = { resetDrag() },
+                    onStart = { resetDrag(); dragging = true },
                     onMove = { draggedSlot = it },
                     onEnd = { settle(it) },
                 ),
@@ -225,6 +212,9 @@ internal fun DockGlass(
                                 onClick = {
                                     resetDrag()
                                     if (!isSelected) currentSelect(index)
+                                    else if (active.value != index.toFloat()) {
+                                        settleJob = scope.launch { active.animateTo(index.toFloat(), movement) }
+                                    }
                                 },
                             ).semantics { contentDescription = title },
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -240,12 +230,12 @@ internal fun DockGlass(
 }
 
 @Composable
-private fun rememberDockGlassStyle(lens: Boolean, pressed: Boolean = false): GlassStyle {
+private fun rememberDockGlassStyle(lens: Boolean, pressed: Boolean = false, moving: Boolean = false): GlassStyle {
     val scheme = MaterialTheme.colorScheme
     val dark = scheme.background.luminance() < .5f
     val navTint = LocalAppearance.current.navigationTint
     val tone = if (navTint) scheme.surfaceContainerHigh else scheme.surface
-    return remember(dark, lens, tone, pressed) {
+    return remember(dark, lens, tone, pressed, moving) {
         val base = if (lens) GlassStyle.clear else GlassStyle.regular
         base.then {
             shape(if (lens) LensShape else ShellShape)
@@ -267,25 +257,16 @@ private fun rememberDockGlassStyle(lens: Boolean, pressed: Boolean = false): Gla
             tint(tone.copy(alpha = tintAlpha))
             if (lens && !dark) whitePoint(.39f)
             ambientResponse(if (lens) .21f else .17f)
-            specularIntensity(if (!lens) .48f else if (pressed) .84f else .68f)
+            specularIntensity(if (!lens) .48f else if (pressed || moving) .84f else .68f)
             edgeSoftness(1.dp)
-            if (lens) pressed {
-                refractionMultiplier(1.12f)
-                lightingIntensity(.82f)
+            if (lens) {
+                chromaticAberrationStrength(if (moving) .12f else .05f)
+                pressed {
+                    refractionMultiplier(1.12f)
+                    lightingIntensity(.82f)
+                }
             }
         }
-    }
-}
-
-/** Preserve the hit area and update the real lens bounds that the fusion container reads. */
-private fun Modifier.glassPressSize(scale: State<Float>) = layout { measurable, constraints ->
-    val width = constraints.maxWidth
-    val height = constraints.maxHeight
-    val lensWidth = (width * scale.value).roundToInt().coerceIn(0, width)
-    val lensHeight = (height * scale.value).roundToInt().coerceIn(0, height)
-    val lens = measurable.measure(Constraints.fixed(lensWidth, lensHeight))
-    layout(width, height) {
-        lens.placeRelative((width - lensWidth) / 2, (height - lensHeight) / 2)
     }
 }
 
@@ -320,7 +301,7 @@ private fun Modifier.dockDrag(
                     move(last)
                     change.consume()
                 }
-                end(if (complete) waterDropRestSlot(last) else selection)
+                end(if (complete && selection == origin) waterDropRestSlot(last) else selection)
             }
         }
     }

@@ -43,7 +43,7 @@ class LabStoreTest {
         val f = LabStore.all.single()
         assertFalse("an experiment must start off", f.defaultEnabled)
         assertTrue("the description must name what is actually implemented", f.description.contains("Haze"))
-        assertTrue(f.description.contains("融合"))
+        assertTrue(f.description.contains("水珠变形"))
         // No promises about features that do not exist.
         listOf("关键浮层", "稳定路径静态玻璃", "全屏折射").forEach {
             assertFalse("description must not promise $it", f.description.contains(it))

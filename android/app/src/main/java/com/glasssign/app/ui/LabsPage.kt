@@ -94,7 +94,7 @@ internal fun LabsPage(s:UiState,onRefresh:()->Unit,onExternalApp:()->Unit,onDiag
                     }
                     Text("当前生效 · ${rendering.mode.title}",style=MaterialTheme.typography.titleSmall)
                     rendering.fallback?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=Muted) }
-                    Text("完整模式在拖动时折射页面内容，水滴会连接、拉开和回弹。轻量模式使用柔和的半透明底栏，关闭模式使用不透明底色。",style=MaterialTheme.typography.bodySmall,color=Muted)
+                    Text("完整模式的水珠会随手指移动、拉伸并回弹，同时折射页面内容。轻量模式使用半透明底栏，关闭模式使用不透明底色。",style=MaterialTheme.typography.bodySmall,color=Muted)
                     if(!rendering.motion)Text("已减少动态效果",style=MaterialTheme.typography.bodySmall,color=Muted)
                     Text("完整模式验证 · ${experiment.effectiveValidation(BuildConfig.VERSION_NAME).label}",style=MaterialTheme.typography.labelMedium,color=Muted)
                     if(experiment.record.isComplete)Text("验证记录：${experiment.record.buildVersion} · ${experiment.record.device}\n${experiment.record.evidenceRef}",style=MaterialTheme.typography.labelSmall,color=Muted)

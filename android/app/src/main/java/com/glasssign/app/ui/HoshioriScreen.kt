@@ -347,10 +347,6 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
     val rendering=rememberDockRendering(rememberLabGlassState().first)
     val hazeState=rememberHazeState()
     val glassInput=remember(hazeState){HazeInput.Sources(hazeState,retention=HazeSourceRetention.ClearWhenUnavailable)}
-    val singleLens=remember(context) {
-        BuildConfig.DEBUG&&context.getSharedPreferences("glass_dock_qa",Context.MODE_PRIVATE)
-            .getBoolean("single_lens",false)
-    }
     /*
      * Actual dock overlay height in px, measured by the dock after layout (bar + lift + navigation-bar
      * inset). Held here so the list's bottom contentPadding follows the real value instead of a fixed
@@ -408,7 +404,7 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
         }
         // [H1] The only place WindowInsets are read. Its composition contains the dock call and nothing else,
         // so an IME frame recomposes ~2 composables instead of the page body + four branches.
-        if(!modalOpen)DockOverlay(rendering=rendering,input=glassInput,singleLens=singleLens,selected=scope.tab,onSelect=onSelect,
+        if(!modalOpen)DockOverlay(rendering=rendering,input=glassInput,selected=scope.tab,onSelect=onSelect,
             onOverlapChange={px->dockOverlap.floatValue=px})
         // Feedback pass: a specific failure now renders as the home "这一步没有完成" card with its own fix buttons
         // (see ui/SignFeedback.kt), so only neutral confirmations still use the transient Snackbar -- one failure no
@@ -516,7 +512,6 @@ private fun onSettingsAction(context:Context,permission:androidx.activity.result
 internal fun BoxScope.DockOverlay(
     rendering:DockRendering,
     input:HazeInput.Sources,
-    singleLens:Boolean,
     selected:Int,
     onSelect:(Int)->Unit,
     onOverlapChange:(Float)->Unit={},
@@ -529,7 +524,7 @@ internal fun BoxScope.DockOverlay(
         onDispose{com.glasssign.app.local.ExperimentalUiRecovery.rendering(context,false)}
     }
     if(visible) {
-        DockGlass(selected,onSelect,rendering.mode,rendering.motion,input,Modifier.align(Alignment.BottomCenter),onOverlapChange,singleLens)
+        DockGlass(selected,onSelect,rendering.mode,rendering.motion,input,Modifier.align(Alignment.BottomCenter),onOverlapChange)
     }
 }
 

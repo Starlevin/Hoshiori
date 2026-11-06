@@ -33,7 +33,7 @@ import java.io.File
 class WaterDropDeviceTest {
     @get:Rule val rule=createAndroidComposeRule<MainActivity>()
 
-    @Test fun realGpuDragSeparatesMembersAndCancelDoesNotNavigate() {
+    @Test fun realGpuDragMovesAndStretchesOneLensAndCancelDoesNotNavigate() {
         var selection=0
         var commits=0
         rule.activityRule.scenario.onActivity { activity -> activity.setContent {
@@ -51,6 +51,7 @@ class WaterDropDeviceTest {
             }
         } }
         rule.waitUntil(12_000){rule.onAllNodesWithTag("waterdrop-dock").fetchSemanticsNodes().size==1}
+        val restingLens=rule.onNodeWithTag("selected-capsule").fetchSemanticsNode().boundsInRoot
         val first=rule.onNodeWithTag("nav-0")
         val last=rule.onNodeWithTag("nav-3").fetchSemanticsNode().boundsInRoot.center
         val firstBounds=first.fetchSemanticsNode().boundsInRoot
@@ -59,15 +60,19 @@ class WaterDropDeviceTest {
         first.performTouchInput{down(center)}
         first.performTouchInput{advanceEventTime(200);moveTo(last-firstBounds.topLeft)}
         rule.waitForIdle()
-        val anchor=rule.onNodeWithTag("selected-capsule").fetchSemanticsNode().boundsInRoot
-        val follower=rule.onNodeWithTag("waterdrop-follower").fetchSemanticsNode().boundsInRoot
-        assertTrue("Two actual laid-out members must move beyond the merge range",follower.left-anchor.right>20*rule.activity.resources.displayMetrics.density)
+        val movingLens=rule.onNodeWithTag("selected-capsule").fetchSemanticsNode().boundsInRoot
+        assertTrue("The lens must move with the finger",movingLens.center.x>restingLens.center.x+firstBounds.width)
+        assertTrue("The lens must stretch",movingLens.width>restingLens.width*1.12f)
+        rule.onAllNodesWithTag("selected-capsule").assertCountEquals(1)
+        rule.onNodeWithTag("waterdrop-follower").assertDoesNotExist()
         val image=rule.onRoot().captureToImage().toPixelMap()
         assertTrue("Sampling must not erase the page",image[image.width/2,image.height/2].green>.45f)
         first.performTouchInput{cancel()}
         rule.waitForIdle()
         assertEquals(0,selection)
         assertEquals(0,commits)
+        val settledLens=rule.onNodeWithTag("selected-capsule").fetchSemanticsNode().boundsInRoot
+        assertEquals(restingLens.width,settledLens.width,2f)
         rule.onNodeWithTag("nav-3").performClick()
         rule.waitForIdle()
         assertEquals(3,selection)
@@ -93,20 +98,22 @@ class WaterDropDeviceTest {
             val bounds=fourth.fetchSemanticsNode().boundsInRoot
             val first=rule.onNodeWithTag("nav-0").fetchSemanticsNode().boundsInRoot.center
             val pitch=bounds.width
+            val restingWidth=rule.onNodeWithTag("selected-capsule").fetchSemanticsNode().boundsInRoot.width
             fourth.performTouchInput{down(center)}
-            // Stop near the bridge, then move far enough for the actual Haze members to separate.
-            fourth.performTouchInput{advanceEventTime(250);moveTo(center-Offset(pitch*1.08f,0f))}
+            fourth.performTouchInput{advanceEventTime(250);moveTo(center-Offset(pitch*.72f,0f))}
             rule.waitForIdle()
-            capture(context,"production-settings-bridge.png")
+            rule.onAllNodesWithTag("selected-capsule").assertCountEquals(1)
+            assertTrue(rule.onNodeWithTag("selected-capsule").fetchSemanticsNode().boundsInRoot.width>restingWidth)
+            capture(context,"production-settings-travelling.png")
             Thread.sleep(700)
             fourth.performTouchInput{advanceEventTime(350);moveTo(first-bounds.topLeft)}
             rule.waitForIdle()
-            capture(context,"production-settings-separated.png")
+            capture(context,"production-settings-far.png")
             Thread.sleep(700)
             fourth.performTouchInput{up()}
             rule.waitForIdle()
             rule.onNodeWithTag("nav-0").assertIsSelected()
-            capture(context,"production-home-rejoined.png")
+            capture(context,"production-home-settled.png")
             Thread.sleep(700)
         } finally {
             lab.setGlassQuality(originalQuality)
