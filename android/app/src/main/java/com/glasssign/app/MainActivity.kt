@@ -29,6 +29,7 @@ import java.util.UUID
 class MainActivity:ComponentActivity() {
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState);enableEdgeToEdge()
+        requestHighestRefreshRate()
         setContent {
             var ready by remember{mutableStateOf(!com.glasssign.app.local.Bootstrap.failed)}
             var retrying by remember{mutableStateOf(false)}
@@ -57,6 +58,25 @@ class MainActivity:ComponentActivity() {
                     Root(vm)
                 }
             }
+        }
+    }
+
+    /**
+     * 请求系统支持的最高刷新率，不锁帧、不写死 120。
+     *
+     * Android 会按窗口的 preferredDisplayModeId 选 mode；从当前 display 的 supportedModes 里挑
+     * refreshRate 最大的一个。高刷设备（90/120/144Hz）自然跑满，60Hz 设备维持 60，30Hz 省电档
+     * 由系统策略决定；Compose 本身没有帧率上限，所以 App 不会成为瓶颈。任何失败都静默忽略，
+     * 不影响启动。
+     */
+    private fun requestHighestRefreshRate() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M) return
+        runCatching {
+            val display = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) display else @Suppress("DEPRECATION") windowManager.defaultDisplay
+            val mode = display?.supportedModes?.maxByOrNull { it.refreshRate } ?: return
+            val params = window.attributes
+            params.preferredDisplayModeId = mode.modeId
+            window.attributes = params
         }
     }
 }

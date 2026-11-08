@@ -21,8 +21,10 @@ import java.io.File
  */
 class PluginIntents(private val context: Context) {
 
-    /** Where the plugin's own facts live, for the user to check. Plain browser navigation. */
+    /** Where the plugin's own facts live, for the user to check. Plain browser navigation.
+     *  NEW_TASK is required because PluginsViewModel starts it from the application context. */
     fun source(): Intent = Intent(Intent.ACTION_VIEW, Uri.parse(PluginSpec.SOURCE_URL))
+        .addCategory(Intent.CATEGORY_BROWSABLE).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
     /**
      * 领签 in the user's app store.

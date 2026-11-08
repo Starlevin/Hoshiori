@@ -335,7 +335,13 @@ class LocalSignEngine(
             val roles=targets.filter{it.isBoundRole()}.map{it.name}
             val available=targets.mapNotNull{GameCatalog.gameForTarget(a.provider,it.id)}.distinct()
             repository.markPendingRoles(id,roles.isNotEmpty(),available)
-            val message=if(roles.isNotEmpty())"已从官方接口读取 ${roles.size} 个角色，请确认" else "已登录，但官方接口没有返回已绑定角色"
+            val message=when {
+                a.provider==LingqianPlugin.ID && roles.isNotEmpty() ->
+                    "已读取 ${roles.size} 项领签任务（本地模拟，未调用官方接口），请确认"
+                roles.isNotEmpty() -> "已从官方接口读取 ${roles.size} 个角色，请确认"
+                a.provider==LingqianPlugin.ID -> "本地模拟平台没有返回任务，请重试"
+                else -> "已登录，但官方接口没有返回已绑定角色"
+            }
             repository.auth(id,"pending",message)
             DiscoverOutcome(roles,roles.isNotEmpty(),message,available,choices,AccountIdentity.read(a.provider,c))
         } catch(e:Exception){ val r=failure(e);repository.auth(id,r.status,r.message);DiscoverOutcome(emptyList(),false,r.message) }
@@ -351,12 +357,14 @@ class LocalServices private constructor(context:Context) {
     val repository=SignRepository(this.context)
     val credentials=LocalCredentialStore(this.context)
     val bindings=LocalAccountBindings(repository,credentials)
-    /** Built-in provider switch (first-level gate). Its own prefs file; never stored in the account database. */
-    val registry=ProviderRegistry(this.context)
+    /** Built-in provider switch (first-level gate). Its own prefs file; never stored in the account database.
+     *  2026-11-08：额外登记插件平台「领签」，只在本机离线模拟签到，不读取第三方数据。 */
+    val registry=ProviderRegistry(this.context, BuiltinProviders.all + LingqianPlugin.manifest)
     /** Lab experiments (water-drop glass). Completely independent of accounts, providers and sign rows. */
     val labs=LabStore(this.context)
     /** The production engine is gated by [registry]: a paused provider is never handed a credential. */
-    val engine=LocalSignEngine(repository,credentials,officialAdapters(),registry)
+    val engine=LocalSignEngine(repository,credentials,
+        officialAdapters()+mapOf(LingqianPlugin.ID to LingqianAdapter({ LingqianPlugin.installed(this.context) })),registry)
     init {repository.recoverInterrupted();bindings.cleanupRetired();bindings.migrateLegacyGames()}
     /**
      * First-time account import. Deliberately NOT provider-gated: pausing a provider stops TASKS, it must never

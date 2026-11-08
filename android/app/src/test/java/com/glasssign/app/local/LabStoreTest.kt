@@ -284,4 +284,46 @@ class LabStoreTest {
         assertEquals(GlassQuality.OFF, LabStore(context).glassQuality())
         assertFalse(LabStore(context).isEnabled(LabStore.FLAG_WATER_DROP_GLASS))
     }
+
+    // ---- P2 (2026-11-07): enhanced-by-default with an explicit-off distinction -----------------------
+
+    @Test fun freshInstallRequestsEnhancedGlassByDefault() {
+        // A user who never opened the lab gets FULL; the device/a11y policy still decides what renders.
+        assertEquals(GlassQuality.FULL, LabStore(context).requestedGlassQuality())
+    }
+
+    @Test fun explicitGlassChoiceIsNeverOverriddenByTheDefault() {
+        val store = LabStore(context)
+        for (quality in GlassQuality.entries) {
+            assertTrue(store.setGlassQuality(quality))
+            assertEquals(quality, LabStore(context).requestedGlassQuality())
+        }
+    }
+
+    @Test fun legacyExplicitOffIsNotUpgradedOnUpgrade() {
+        val prefs = context.getSharedPreferences(LabStore.PREFS_NAME, Context.MODE_PRIVATE)
+        // Old builds stored just the boolean. A user who deliberately switched it OFF keeps LITE.
+        prefs.edit().putBoolean("lab_water_drop_glass_enabled", false).commit()
+        assertEquals(GlassQuality.LITE, LabStore(context).requestedGlassQuality())
+    }
+
+    @Test fun legacyExplicitOnIsKeptEnhanced() {
+        val prefs = context.getSharedPreferences(LabStore.PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("lab_water_drop_glass_enabled", true).commit()
+        assertEquals(GlassQuality.FULL, LabStore(context).requestedGlassQuality())
+    }
+
+    @Test fun crashRollbackStaysDowngradedAfterRestart() {
+        val store = LabStore(context)
+        store.setEnabled(LabStore.FLAG_WATER_DROP_GLASS, true)
+        assertTrue(store.recoverRecordedUiCrash(true, "2026-11-07T19:00:00+08:00"))
+        // The rollback wrote an explicit LITE; the enhanced default must not re-enable FULL.
+        assertEquals(GlassQuality.LITE, LabStore(context).requestedGlassQuality())
+    }
+
+    @Test fun enhancedDefaultNeverWritesAChoiceOrEvidence() {
+        LabStore(context).requestedGlassQuality()
+        val prefs = context.getSharedPreferences(LabStore.PREFS_NAME, Context.MODE_PRIVATE)
+        assertTrue("reading the default must not persist a choice", prefs.all.isEmpty())
+    }
 }

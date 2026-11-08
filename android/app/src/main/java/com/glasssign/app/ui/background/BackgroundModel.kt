@@ -6,11 +6,10 @@ import kotlin.math.min
 /**
  * Where the page wallpaper comes from.
  *
- * `custom` points at the private copy in [BackgroundFileStore]; `starfield` is the original bundled
- * artwork (`R.drawable.hoshiori_starfield_v076`) referenced only through [BundledBackgrounds], so this enum
- * and its persistence stay free of a resource id that the app owner may still rename.
+ * Custom images point at the private copy in [BackgroundFileStore]. Bundled wallpapers were removed;
+ * legacy stored values are migrated to [none] by [BackgroundPreferences.decode].
  */
-enum class BackgroundSource { none, custom, starfield, bundled }
+enum class BackgroundSource { none, custom }
 
 /** User-tunable rendering of the page background. Mask/blur only touch the wallpaper layer, never text. */
 data class BackgroundPreferences(
@@ -31,7 +30,7 @@ data class BackgroundPreferences(
 
         /** Stored form: all three fields validated independently, so a corrupt file yields defaults. */
         fun decode(source: String?, mask: Float?, blur: Float?) = BackgroundPreferences(
-            source = BackgroundSource.values().firstOrNull { it.name == source } ?: BackgroundSource.none,
+            source = if (source == BackgroundSource.custom.name) BackgroundSource.custom else BackgroundSource.none,
             maskStrength = mask ?: defaultMask,
             blurDp = blur ?: defaultBlur,
         ).sanitized()

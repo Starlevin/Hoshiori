@@ -17,8 +17,8 @@ android {
         applicationId = "com.glasssign.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 26
-        versionName = "0.8.0-preview.3"
+        versionCode = 27
+        versionName = "0.8.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         resourceConfigurations += listOf("zh", "en")
     }
@@ -31,6 +31,27 @@ android {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
+    // P0 launcher isolation (2026-11-07). The uncommitted src/debug/AndroidManifest.xml is the QA
+    // Playground experiment: it injects a MAIN/LAUNCHER for GlassPrototypeActivity and REMOVES the
+    // three real launcher aliases, so every ordinary .debug APK used to open the Playground instead of
+    // the sign-in app. We must not delete or overwrite that user file, so instead we point the debug
+    // source set's manifest at an explicitly chosen file:
+    //   - ordinary Debug (com.glasssign.app.debug) -> manifests/ordinary/ (empty overlay): src/main's
+    //     MainActivity launcher aliases survive, the desktop icon opens the FULL app, and the user's
+    //     dark/light launcher-icon switching still works.
+    //   - -PglassQa=true (com.glasssign.app.glassqa) -> manifests/qa/ (byte-identical copy of the QA
+    //     Playground manifest): the isolated QA package still opens GlassPrototypeActivity directly.
+    // Release merges only src/main/AndroidManifest.xml and is therefore untouched either way.
+    // Both files live outside src/ so AGP can never auto-discover them as a second manifest source.
+    sourceSets {
+        getByName("debug") {
+            manifest.srcFile(
+                if (glassQa.get()) "manifests/qa/AndroidManifest.xml"
+                else "manifests/ordinary/AndroidManifest.xml"
+            )
         }
     }
 

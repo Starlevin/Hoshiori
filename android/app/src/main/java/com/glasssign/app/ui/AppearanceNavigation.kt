@@ -55,13 +55,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.glasssign.app.ui.background.BackgroundSource
 
 /**
  * Local appearance navigation state. Stored as its `name` so `rememberSaveable` only has to keep a
  * String (an enum would need a custom Saver) and rotation never falls back to the overview.
  */
-internal enum class AppearanceSection { Overview, Presets, Colors, Background, Glass, Typography, LauncherIcon }
+internal enum class AppearanceSection { Overview, Presets, Colors, Typography, LauncherIcon }
 
 /**
  * Full-screen host for every appearance control.
@@ -115,6 +114,7 @@ fun AppearanceSettingsScreen(onDismiss: () -> Unit) {
                             section = section,
                             onBack = ::goBack,
                             modifier = Modifier.fillMaxSize(),
+                            onGoToSection = { sectionName = it.name },
                         )
                     }
                 }
@@ -141,7 +141,7 @@ fun AppearanceSettingsScreen(onDismiss: () -> Unit) {
  * provides the Box so a page can use a LazyColumn or a Column with a shared modifier root.
  */
 @Composable
-internal fun AppearanceSubPage(section: AppearanceSection, onBack: () -> Unit, modifier: Modifier = Modifier) {
+internal fun AppearanceSubPage(section: AppearanceSection, onBack: () -> Unit, modifier: Modifier = Modifier, onGoToSection: (AppearanceSection) -> Unit = {}) {
     Box(modifier) {
         when (section) {
             AppearanceSection.Overview -> AppearanceOverview(
@@ -149,10 +149,8 @@ internal fun AppearanceSubPage(section: AppearanceSection, onBack: () -> Unit, m
                 onOpen = {},
                 onResetRequest = {},
             )
-            AppearanceSection.Presets -> AppearancePresetsPage()
+            AppearanceSection.Presets -> AppearancePresetsPage(onOpenColors = { onGoToSection(AppearanceSection.Colors) })
             AppearanceSection.Colors -> AppearanceColorsPage()
-            AppearanceSection.Background -> AppearanceBackgroundPage()
-            AppearanceSection.Glass -> AppearanceGlassPage()
             AppearanceSection.Typography -> AppearanceTypographyPage()
             AppearanceSection.LauncherIcon -> AppearanceLauncherIconPage()
         }
@@ -202,11 +200,9 @@ private fun AppearanceTopBar(section: AppearanceSection, onBack: () -> Unit, onC
 @Composable
 private fun AppearanceSection.label(): String = when (this) {
     AppearanceSection.Overview -> "外观与主题"
-    AppearanceSection.Presets -> "主题预设"
-    AppearanceSection.Colors -> "主题色"
-    AppearanceSection.Background -> "页面背景"
-    AppearanceSection.Glass -> "玻璃与动效"
-    AppearanceSection.Typography -> "字体与排版"
+    AppearanceSection.Presets -> "主题与色彩"
+    AppearanceSection.Colors -> "自定义色"
+    AppearanceSection.Typography -> "显示与辅助"
     AppearanceSection.LauncherIcon -> "应用图标"
 }
 
@@ -227,24 +223,14 @@ private fun AppearanceOverview(
     onResetRequest: () -> Unit,
 ) {
     val entries = listOf(
+        // 2026-11-07 产品决策：删除液态玻璃调节、页面背景（遮罩未做好）、显示与辅助里的动效/层次块。
+        // 外观一级只保留普通用户真正要用的三项；默认视觉（经典黑白 + 增强卡片）即用户当前所见，不另加开关。
         AppearanceEntry(
-            AppearanceSection.Presets, "主题预设", "经典黑白为默认，另有深蓝与柔紫",
+            AppearanceSection.Presets, "主题与色彩", "经典黑白、深蓝、柔紫与自定义色",
             HoshioriIcons.Appearance, settings.styleLabel(),
         ),
         AppearanceEntry(
-            AppearanceSection.Colors, "主题色", "预设色、最近使用、HEX 与 RGB",
-            HoshioriIcons.Palette, settings.colorValueLabel(),
-        ),
-        AppearanceEntry(
-            AppearanceSection.Background, "页面背景", "无背景、星海插画或自选图片",
-            HoshioriIcons.Wallpaper, backgroundLabel(),
-        ),
-        AppearanceEntry(
-            AppearanceSection.Glass, "玻璃与动效", "玻璃材质、表面层次与导航融合",
-            HoshioriIcons.Glass, settings.glassLabel(),
-        ),
-        AppearanceEntry(
-            AppearanceSection.Typography, "字体与排版", "文字缩放与字体",
+            AppearanceSection.Typography, "显示与辅助", "字体、文字缩放与预览",
             HoshioriIcons.Typography, settings.typographyLabel(),
         ),
         AppearanceEntry(
@@ -258,7 +244,12 @@ private fun AppearanceOverview(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { AppearanceSummaryCard(settings) }
-        items(entries, key = { it.section.name }) { entry ->
+        item { AppearanceGroupHeader("外观") }
+        items(entries.take(1), key = { it.section.name }) { entry ->
+            AppearanceEntryRow(entry, onClick = { onOpen(entry.section) })
+        }
+        item { AppearanceGroupHeader("个性化") }
+        items(entries.drop(1), key = { it.section.name }) { entry ->
             AppearanceEntryRow(entry, onClick = { onOpen(entry.section) })
         }
         item {
@@ -279,6 +270,17 @@ private fun AppearanceOverview(
             )
         }
     }
+}
+
+/** P2 §5 grouping header: lower information density on the first-level appearance screen. */
+@Composable
+private fun AppearanceGroupHeader(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 6.dp, top = 4.dp),
+    )
 }
 
 /** Style-first summary: the user sees the current look before any control. */
@@ -442,33 +444,6 @@ private fun AppearanceSettings.fontLabel(): String = when (font) {
 }
 
 private fun AppearanceSettings.scalePercent(): String = "${(textScale * 100f).toInt()}%"
-
-/**
- * Current page background, read from the committed preferences. Not an extension of
- * [AppearanceSettings]: the background keys are independent of the appearance keys, so the row's
- * trailing value follows the background even while the appearance settings are unchanged.
- */
-@Composable
-private fun backgroundLabel(): String = when (LocalBackgroundPreferences.current.source) {
-    BackgroundSource.starfield -> "星海"
-    BackgroundSource.custom -> "自选图片"
-    BackgroundSource.bundled -> "内置图片"
-    BackgroundSource.none -> "无背景"
-}
-
-private fun AppearanceSettings.glassLabel(): String {
-    val material = when (glassMode) {
-        "light" -> "轻量"
-        "off" -> "关闭"
-        else -> "标准"
-    }
-    val surface = when (surfaceEffect) {
-        "standard" -> "标准"
-        "ultra" -> "增强"
-        else -> "简洁"
-    }
-    return "$material · $surface"
-}
 
 private fun AppearanceSettings.typographyLabel(): String =
     if (scaleEnabled) scalePercent() else "跟随系统"

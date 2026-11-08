@@ -41,14 +41,18 @@ class LocalServicesWiringTest {
     private fun labPrefs() = context.getSharedPreferences(LabStore.PREFS_NAME, Context.MODE_PRIVATE)
 
     /**
-     * The singleton exists and exposes the four-provider registry plus the single lab flag. This is the only
-     * assertion that touches the shared instance, and it only reads immutable shape (ids), not mutable choices.
+     * The singleton exists and exposes the four built-in providers PLUS the one plugin platform
+     * (领签, local simulation only) plus the single lab flag. Immutable shape (ids), not mutable choices.
      */
     @Test fun localServicesExposeTheRegistryAndTheLabStore() {
         val services = LocalServices.get(context)
         assertNotNull(services.registry)
         assertNotNull(services.labs)
-        assertEquals(4, services.registry.providers.size)
+        assertEquals(5, services.registry.providers.size)
+        assertEquals(
+            listOf("miyoushe", "skland", "tagged", "kurobbs", "lingqian"),
+            services.registry.providers.map { it.id },
+        )
         assertEquals(listOf(LabStore.FLAG_WATER_DROP_GLASS), services.labs.flags.map { it.id })
     }
 

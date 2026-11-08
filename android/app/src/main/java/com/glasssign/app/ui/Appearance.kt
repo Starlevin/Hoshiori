@@ -27,7 +27,7 @@ import androidx.compose.ui.unit.dp
 data class AppearanceSettings(
     val glassMode:String="standard",val mode:String="system",val pureBlack:Boolean=false,val colorStyle:String="neutral",
     val seed:Int=0xFF4263C7.toInt(),val dynamicColor:Boolean=false,
-    val surfaceEffect:String="none",val navigationTint:Boolean=false,
+    val surfaceEffect:String="ultra",val navigationTint:Boolean=false,
     val scaleEnabled:Boolean=false,val textScale:Float=1f,val font:String="system",val customColors:List<Int> = emptyList(),
 )
 
@@ -50,7 +50,7 @@ class AppearanceController(context:Context) {
         pureBlack=preferences.getBoolean("pure_black",false),
         colorStyle=preferences.getString("color_style","neutral").orEmpty().takeIf{it in listOf("neutral","vivid","tinted","soft","monochrome")} ?: "neutral",
         seed=preferences.getInt("seed",0xFF4263C7.toInt()),dynamicColor=preferences.getBoolean("dynamic",false),
-        surfaceEffect=preferences.getString("surface_effect","none").orEmpty().takeIf{it in listOf("none","standard","ultra")} ?: "none",
+        surfaceEffect=preferences.getString("surface_effect","ultra").orEmpty().takeIf{it in listOf("none","standard","ultra")} ?: "ultra",
         navigationTint=preferences.getBoolean("navigation_tint",false),
         scaleEnabled=preferences.getBoolean("scale_enabled",false),textScale=preferences.getFloat("text_scale",1f).coerceIn(.85f,1.4f),
         font=preferences.getString("font","system").orEmpty().takeIf{it in listOf("system","sans","serif","mono")} ?: "system",
@@ -187,14 +187,11 @@ internal fun appearanceScheme(settings:AppearanceSettings,dark:Boolean,wallpaper
         if(proportion<4.6f)primary=lerp(primary,if(dark)Color.White else Color.Black,.13f)
     }
     val tint=when(settings.colorStyle){"tinted"->.085f;"soft"->.025f;else->0f}
-    // True OLED: when pureBlack is on in dark mode, background AND surfaces are pure
-    // black (not the old 0xFF101010 grey), so OLED pixels actually turn off. The page
-    // gradient is flattened by the same change (see pageGradientBrush): its two ends
-    // become black once primaryContainer/secondaryContainer are black. Only the accent
-    // (primary/secondary, selected state, buttons, accent text) keeps the user colour.
-    val black=dark&&settings.pureBlack
-    val background=if(black)Color.Black else if(monochrome)neutral else lerp(neutral,primary,tint)
-    val surface=if(black)Color.Black else if(monochrome)paper else lerp(paper,primary,tint*.65f)
+    // OLED 纯黑（2026-11-07 产品决策）：只把页面背景压成纯黑，卡片 / 输入框 / 各层容器仍保留
+    // 可区分的深灰层级，不把整个界面抹成同一块黑。pureBlack 不再参与 surface / container 的计算。
+    val oled=dark&&settings.pureBlack
+    val background=if(oled)Color.Black else if(monochrome)neutral else lerp(neutral,primary,tint)
+    val surface=if(monochrome)paper else lerp(paper,primary,tint*.65f)
     // Page title and card body must agree on which side is darker: one ink for background AND surface.
     val onSurface=readableOnIn(listOf(surface,background))
     // Secondary text (`Muted`) is bodySmall 11sp/17sp, i.e. normal-size text: AA needs 4.5:1 against the
@@ -210,16 +207,16 @@ internal fun appearanceScheme(settings:AppearanceSettings,dark:Boolean,wallpaper
     val onError=repairContrast(readableOn(error),away,listOf(error),4.5f)
     return base.copy(
         primary=primary,onPrimary=readableOn(primary),
-        primaryContainer=if(black)Color.Black else lerp(surface,primary,if(dark).2f else .12f),onPrimaryContainer=onSurface,
+        primaryContainer=lerp(surface,primary,if(dark).2f else .12f),onPrimaryContainer=onSurface,
         secondary=secondary,onSecondary=readableOn(secondary),
-        secondaryContainer=if(black)Color.Black else lerp(surface,secondary,.14f),onSecondaryContainer=onSurface,
+        secondaryContainer=lerp(surface,secondary,.14f),onSecondaryContainer=onSurface,
         tertiary=if(dark)Color(0xFF7ED6B0) else Color(0xFF216B4D),
         background=background,onBackground=onSurface,surface=surface,onSurface=onSurface,
-        surfaceVariant=if(black)Color.Black else lerp(surface,onSurface,.045f),onSurfaceVariant=variant,
+        surfaceVariant=lerp(surface,onSurface,.045f),onSurfaceVariant=variant,
         surfaceContainerLowest=background,surfaceContainerLow=surface,
-        surfaceContainer=if(black)Color.Black else lerp(surface,onSurface,.025f),
-        surfaceContainerHigh=if(black)Color.Black else lerp(surface,onSurface,.055f),
-        surfaceContainerHighest=if(black)Color.Black else lerp(surface,onSurface,.08f),
+        surfaceContainer=lerp(surface,onSurface,.025f),
+        surfaceContainerHigh=lerp(surface,onSurface,.055f),
+        surfaceContainerHighest=lerp(surface,onSurface,.08f),
         outline=if(dark)Color(0xFF778090) else Color(0xFF747E8F),
         outlineVariant=if(dark)Color(0xFF363B46) else Color(0xFFDCE0EA),
         surfaceTint=primary,

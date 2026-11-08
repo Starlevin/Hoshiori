@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- adaptive icon 前景：两颗略重叠的圆，直接表达「双水滴几何融合」，不使用渐变蒙层。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF37C9AC"
+        android:pathData="M 41,54 m -17,0 a 17,17 0 1,0 34,0 a 17,17 0 1,0 -34,0" />
+    <path
+        android:fillColor="#FF7FA8FF"
+        android:pathData="M 67,54 m -17,0 a 17,17 0 1,0 34,0 a 17,17 0 1,0 -34,0" />
+</vector>

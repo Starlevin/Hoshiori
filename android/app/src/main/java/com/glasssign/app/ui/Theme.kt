@@ -1,14 +1,34 @@
 package com.glasssign.app.ui
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AddPhotoAlternate
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material3.Icon
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Waves
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -22,7 +42,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import com.glasssign.app.ui.background.BackgroundPreferences
 import com.glasssign.app.ui.background.BackgroundRepository
 import com.glasssign.app.ui.background.BackgroundSource
-import com.glasssign.app.ui.background.HoshioriBackground
 import com.glasssign.app.ui.background.LocalBackgroundEnabled
 import com.glasssign.app.ui.background.decodePreview
 import com.glasssign.app.ui.background.persistPickedImage
@@ -35,20 +54,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Slider
 import androidx.compose.ui.Modifier
@@ -158,9 +174,10 @@ internal fun BackgroundSettingsSection() {
 
     fun refreshPreview() {
         scope.launch {
-            preview = withContext(Dispatchers.Default) { decodePreview(context, 480)?.asImageBitmap() }
+            preview = withContext(Dispatchers.Default) { decodePreview(context, 640)?.asImageBitmap() }
         }
     }
+
     LaunchedEffect(committed.source) {
         if (committed.source == BackgroundSource.custom) refreshPreview() else preview = null
     }
@@ -172,110 +189,294 @@ internal fun BackgroundSettingsSection() {
         busy = true
         message = null
         scope.launch {
-            val result = runCatching { persistPickedImage(repo, uri, committed) }
-            busy = false
-            result.onSuccess { saved ->
-                // Commit right away: the bytes are already in the private store, so the page can switch
-                // before the user releases any slider.
-                bindings?.commit(saved)
-                message = "已保存到本机，可随时清除"
-                refreshPreview()
-            }.onFailure { message = it.message ?: "无法保存所选图片" }
-        }
-    }
-
-    Text("页面背景", style = MaterialTheme.typography.titleMedium)
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(
-            selected = committed.source == BackgroundSource.none,
-            onClick = {
-                message = null
-                scope.launch {
-                    val repo = repository
-                    if (repo != null) {
-                        busy = true
-                        bindings?.commit(runCatching { repo.clear(committed) }.getOrDefault(committed))
-                        busy = false
-                    } else {
-                        bindings?.commit(committed.copy(source = BackgroundSource.none))
-                    }
-                    preview = null
+            runCatching { persistPickedImage(repo, uri, committed) }
+                .onSuccess { saved ->
+                    bindings?.commit(saved)
+                    message = "图片已保存到本机"
+                    refreshPreview()
                 }
-            },
-            label = { Text("无背景") },
-            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-        )
-        FilterChip(
-            selected = committed.source == BackgroundSource.starfield,
-            onClick = {
-                message = null
-                // No file copy and no disk read: the bundled artwork is decoded in the page composable once.
-                bindings?.commit(committed.copy(source = BackgroundSource.starfield))
-            },
-            label = { Text("星海") },
-            enabled = !busy,
-            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-        )
-        FilterChip(
-            selected = committed.source == BackgroundSource.custom,
-            onClick = {
-                if (repository == null) return@FilterChip
-                picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-            },
-            label = { Text(if (committed.source == BackgroundSource.custom) "换图" else "自选") },
-            enabled = !busy && repository != null,
-            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-        )
-    }
-    Text(
-        "「星海」为内置插画，只是背景选项，不会改动你已选的主题色。自选图片使用系统照片选择器读取，不需要存储权限；" +
-            "图片只保存在本应用私有目录，不上传，清除后恢复默认背景。",
-        style = MaterialTheme.typography.bodySmall, color = Muted,
-    )
-    if (busy) {
-        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-            Text("正在处理图片…", style = MaterialTheme.typography.bodySmall, color = Muted)
+                .onFailure { message = it.message ?: "无法保存所选图片" }
+            busy = false
         }
     }
-    message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Muted) }
 
-    if (shown.source != BackgroundSource.none) {
-        Spacer(Modifier.height(8.dp))
-        preview?.let { bitmap ->
-            // Preview decodes the stored copy once and is reused while the source does not change; it is
-            // never decoded per frame and released with the dialog.
-            Surface(shape = GlassShape, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
-                androidx.compose.foundation.Image(bitmap, contentDescription = "当前背景预览",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+    fun chooseImage() {
+        if (!busy && repository != null) {
+            picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        }
+    }
+
+    fun clearBackground() {
+        // Set `busy` synchronously, before any coroutine is launched: a second tap in the same frame must
+        // not start a concurrent clear while the first one is still deleting the private copy.
+        if (busy) return
+        busy = true
+        message = null
+        draft = null
+        scope.launch {
+            val result = if (repository != null && committed.source == BackgroundSource.custom) {
+                runCatching { repository.clear(committed) }
+            } else {
+                Result.success(committed.copy(source = BackgroundSource.none))
+            }
+            busy = false
+            result.onSuccess { cleared ->
+                bindings?.commit(cleared)
+                preview = null
+                message = "已恢复为无背景"
+            }.onFailure {
+                message = it.message ?: "清除背景失败"
+                // The delete failed, so a custom photo may still be on disk: put the state back honestly
+                // instead of leaving the page claiming "no background" while the wallpaper is still there.
+                preview = null
+                refreshPreview()
             }
         }
-        // One draft for both sliders: showing `draft ?: committed` for each would let the first drag reset
-        // the other value to the committed one.
-        val mask = shown.maskStrength
-        Text("遮罩强度 ${(mask * 100).toInt()}%", color = Muted, style = MaterialTheme.typography.bodyLarge)
-        Slider(
-            value = mask, valueRange = BackgroundPreferences.MaskRange, steps = 16,
-            onValueChange = { value -> draft = shown.copy(maskStrength = value).also { bindings?.preview(it) } },
-            onValueChangeFinished = {
-                val finished = draft ?: shown
-                draft = null
-                bindings?.commit(finished)
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        PreferenceGroup("背景样式") {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    BackgroundChoiceCard(
+                        modifier = Modifier.weight(1f),
+                        title = "无背景",
+                        description = "使用当前主题底色",
+                        selected = committed.source == BackgroundSource.none,
+                        enabled = !busy,
+                        plain = true,
+                        thumbnail = null,
+                        onClick = ::clearBackground,
+                    )
+                    BackgroundChoiceCard(
+                        modifier = Modifier.weight(1f),
+                        title = "自选图片",
+                        description = if (committed.source == BackgroundSource.custom) "已设置 · 点击更换" else "从相册选择",
+                        selected = committed.source == BackgroundSource.custom,
+                        enabled = !busy && repository != null,
+                        plain = false,
+                        thumbnail = if (committed.source == BackgroundSource.custom) preview else null,
+                        onClick = ::chooseImage,
+                    )
+                }
+                if (busy) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Text(
+                            "正在处理图片…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Muted,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        )
+                    }
+                }
+            }
+        }
+
+        if (shown.source == BackgroundSource.custom) {
+            PreferenceGroup("当前图片") {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (preview != null) {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        ) {
+                            Image(
+                                bitmap = preview!!,
+                                contentDescription = "当前背景预览",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                            )
+                        }
+                    } else {
+                        Box(
+                            Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                                .semantics { contentDescription = "正在载入背景预览" },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                        }
+                    }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(onClick = ::clearBackground, enabled = !busy) { Text("清除背景") }
+                        TextButton(onClick = ::chooseImage, enabled = !busy && repository != null) { Text("更换图片") }
+                    }
+                }
+            }
+
+            PreferenceGroup("图片显示效果") {
+                Column(
+                    Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    val mask = shown.maskStrength
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("背景遮罩", style = MaterialTheme.typography.bodyMedium)
+                        androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                        Text((mask * 100).toInt().toString() + "%", style = MaterialTheme.typography.labelLarge, color = Muted)
+                    }
+                    Slider(
+                        value = mask,
+                        valueRange = BackgroundPreferences.MaskRange,
+                        steps = 16,
+                        modifier = Modifier.semantics {
+                            contentDescription = "背景遮罩，当前 ${(mask * 100).toInt()}%"
+                        },
+                        onValueChange = { value -> draft = shown.copy(maskStrength = value).also { bindings?.preview(it) } },
+                        onValueChangeFinished = {
+                            val finished = draft ?: shown
+                            draft = null
+                            bindings?.commit(finished)
+                        },
+                    )
+
+                    val blur = shown.blurDp
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("背景模糊", style = MaterialTheme.typography.bodyMedium)
+                        androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                        Text(blur.toInt().toString() + " dp", style = MaterialTheme.typography.labelLarge, color = Muted)
+                    }
+                    Slider(
+                        value = blur,
+                        valueRange = BackgroundPreferences.BlurRange,
+                        steps = 9,
+                        modifier = Modifier.semantics {
+                            contentDescription = "背景模糊，当前 ${blur.toInt()} dp"
+                        },
+                        onValueChange = { value -> draft = shown.copy(blurDp = value).also { bindings?.preview(it) } },
+                        onValueChangeFinished = {
+                            val finished = draft ?: shown
+                            draft = null
+                            bindings?.commit(finished)
+                        },
+                    )
+                    Text(
+                        "遮罩与模糊只作用于图片，不影响文字和卡片。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Muted,
+                    )
+                }
+            }
+        }
+
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Rounded.Lock, contentDescription = null, tint = Muted, modifier = Modifier.size(16.dp))
+            Text(
+                "图片仅保存在本机，不上传；清除后恢复默认背景。",
+                style = MaterialTheme.typography.bodySmall,
+                color = Muted,
+            )
+        }
+        message?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = Muted,
+                modifier = Modifier
+                    .padding(horizontal = 4.dp)
+                    .semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
+    }
+}
+
+@Composable
+private fun BackgroundChoiceCard(
+    modifier: Modifier,
+    title: String,
+    description: String,
+    selected: Boolean,
+    enabled: Boolean,
+    plain: Boolean,
+    thumbnail: ImageBitmap?,
+    onClick: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    // TalkBack reads the visible title and description from the Text nodes below; the card itself only
+    // adds the selection state and a radio-like role, so nothing is hidden behind one merged label and
+    // the user hears "已选 / 未选" as a real state rather than as part of a long sentence.
+    val state = if (selected) "已选" else "未选"
+    Surface(
+        modifier = modifier
+            .heightIn(min = 136.dp)
+            .clickable(enabled = enabled, onClick = onClick)
+            .semantics {
+                role = Role.RadioButton
+                contentDescription = "$title，$description，$state"
             },
-        )
-        val blur = shown.blurDp
-        Text("背景模糊 ${blur.toInt()} dp", color = Muted, style = MaterialTheme.typography.bodyLarge)
-        Slider(
-            value = blur, valueRange = BackgroundPreferences.BlurRange, steps = 9,
-            onValueChange = { value -> draft = shown.copy(blurDp = value).also { bindings?.preview(it) } },
-            onValueChangeFinished = {
-                val finished = draft ?: shown
-                draft = null
-                bindings?.commit(finished)
-            },
-        )
-        Text("遮罩与模糊只作用于背景图片，文字和卡片保持原有对比度。", style = MaterialTheme.typography.bodySmall, color = Muted)
+        shape = RoundedCornerShape(18.dp),
+        color = if (selected) colors.primary.copy(alpha = .08f) else colors.surface,
+        border = BorderStroke(
+            if (selected) 1.5.dp else 1.dp,
+            if (selected) colors.primary.copy(alpha = .85f) else colors.outlineVariant.copy(alpha = .55f),
+        ),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(11.dp),
+            verticalArrangement = Arrangement.spacedBy(9.dp),
+        ) {
+            Box(
+                Modifier.fillMaxWidth().height(68.dp)
+                    .clip(RoundedCornerShape(13.dp))
+                    .background(colors.surfaceContainerHigh),
+                contentAlignment = Alignment.Center,
+            ) {
+                when {
+                    thumbnail != null -> Image(
+                        bitmap = thumbnail,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    plain -> {
+                        Box(
+                            Modifier.fillMaxSize().background(colors.background),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(Icons.Rounded.Waves, contentDescription = null, tint = colors.outline, modifier = Modifier.size(24.dp))
+                        }
+                    }
+                    else -> Icon(
+                        Icons.Rounded.AddPhotoAlternate,
+                        contentDescription = null,
+                        tint = colors.primary,
+                        modifier = Modifier.size(28.dp),
+                    )
+                }
+                if (selected) {
+                    Surface(
+                        modifier = Modifier.align(Alignment.TopEnd).padding(6.dp),
+                        shape = CircleShape,
+                        color = colors.primary,
+                    ) {
+                        Icon(
+                            Icons.Rounded.Check,
+                            contentDescription = null,
+                            tint = colors.onPrimary,
+                            modifier = Modifier.padding(4.dp).size(14.dp),
+                        )
+                    }
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(description, style = MaterialTheme.typography.bodySmall, color = Muted)
+            }
+        }
     }
 }
 
@@ -319,6 +520,18 @@ val Providers = listOf(
         fields = listOf("token"),
         sample = "{\"token\":\"...\",\"games\":[\"3\",\"2\"],\"communityCheckin\":true}",
         help = "token 用于读取本人绑定角色并执行社区/角色签到；本机会保存稳定的应用设备标识，避免每天更换指纹。",
+    ),
+    // 2026-11-08：插件平台。需先在「设置 → 插件」安装并验签领签；签到在星栞本机离线模拟执行，
+    // 不读取领签的账号或令牌，也不调用官方接口。
+    ProviderMeta(
+        id = "lingqian",
+        title = "领签 · 本地模拟",
+        games = "领签任务（本机模拟）",
+        color = Color(0xFF6B7280),
+        icon = Icons.Rounded.Extension,
+        fields = emptyList(),
+        sample = "{}",
+        help = "领签是独立第三方应用：星栞不读取它的账号、令牌或数据库，也不替它执行后台任务。这里的签到只是本机离线模拟，用来验证绑定与记录链路，不代表官方已签到。",
     ),
 )
 

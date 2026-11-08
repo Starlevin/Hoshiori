@@ -40,7 +40,7 @@ internal fun rememberProviderStates():List<ProviderState> {
 internal fun rememberLabGlassState():Pair<GlassQuality,LabFlagState> {
     val context=LocalContext.current
     val labs=remember(context.applicationContext){LocalServices.get(context).labs}
-    fun read()=labs.glassQuality() to requireNotNull(labs.state(LabStore.FLAG_WATER_DROP_GLASS))
+    fun read()=labs.requestedGlassQuality() to requireNotNull(labs.state(LabStore.FLAG_WATER_DROP_GLASS))
     var state by remember(labs){mutableStateOf(read())}
     DisposableEffect(labs) {
         val listener=labs.listen{state=read()}

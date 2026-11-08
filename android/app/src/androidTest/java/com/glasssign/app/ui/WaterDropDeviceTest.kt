@@ -87,7 +87,7 @@ class WaterDropDeviceTest {
         val originalBackground=background.read()
         try {
             lab.setGlassQuality(com.glasssign.app.local.GlassQuality.FULL)
-            background.save(BackgroundPreferences(BackgroundSource.starfield,.15f,0f))
+            background.save(BackgroundPreferences())
             rule.activityRule.scenario.recreate()
             rule.waitUntil(15_000){rule.onAllNodesWithTag("waterdrop-dock").fetchSemanticsNodes().size==1}
             rule.onNodeWithTag("nav-3").performClick()

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Ordinary Debug overlay for com.glasssign.app.debug.
+
+  Deliberately EMPTY: the real launcher (three activity-alias entries targeting MainActivity)
+  lives in src/main/AndroidManifest.xml and must be preserved so the desktop icon opens the
+  full sign-in app, with dark/light launcher-icon switching intact.
+
+  src/debug/AndroidManifest.xml is the user's uncommitted QA Playground experiment (it injects a
+  MAIN/LAUNCHER for GlassPrototypeActivity and removes the three aliases). We do NOT delete or edit
+  that file; build.gradle.kts selects it only for -PglassQa=true via manifests/qa/. This file is
+  selected for every ordinary Debug build instead, so the QA manifest can never leak into the .debug
+  APK. Release is unaffected (it merges only src/main/AndroidManifest.xml).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

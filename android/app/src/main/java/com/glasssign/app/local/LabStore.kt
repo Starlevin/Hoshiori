@@ -112,6 +112,31 @@ class LabStore(
         return runCatching { store.edit().putBoolean(key(id, KEY_ENABLED), enabled).commit() }.getOrDefault(false)
     }
 
+    /**
+     * P2 (2026-11-07): "unset" vs "explicitly turned off" are different facts.
+     *
+     * The old `glassQuality()` treats an absent quality key as LITE. That is correct for the tiny lab
+     * store in isolation (and the JVM tests assert it), but the PRODUCT decision is that Liquid Glass
+     * 2.0 is the default enhanced visual on a fresh install: a user who never opened the lab must get
+     * FULL (subject to the device/a11y downgrade in DockGlassPolicy), while a user who explicitly chose
+     * OFF/LITE must keep that choice forever.
+     *
+     * This function is the single production decision point. It NEVER writes a preference: an absent
+     * key means "use the enhanced default", and any saved value (including OFF) is returned verbatim.
+     * The legacy boolean key is still honoured for users who toggled the experiment before the quality
+     * key existed. `rollbackAdvancedGlass` writes an explicit LITE, so a recorded crash stays downgraded.
+     */
+    @Synchronized
+    internal fun requestedGlassQuality(): GlassQuality = runCatching {
+        val saved = prefs?.getString(key(FLAG_WATER_DROP_GLASS, KEY_GLASS_QUALITY), null)
+        if (saved != null) return GlassQuality.entries.firstOrNull { it.name == saved } ?: GlassQuality.FULL
+        val legacy = prefs?.getBoolean(key(FLAG_WATER_DROP_GLASS, KEY_ENABLED), false) ?: false
+        // Absent quality + absent legacy choice = fresh install / never touched the lab => enhanced default.
+        // A legacy user who explicitly disabled the experiment (key present, false) keeps LITE.
+        val legacyPresent = prefs?.contains(key(FLAG_WATER_DROP_GLASS, KEY_ENABLED)) == true
+        if (!legacyPresent) GlassQuality.FULL else if (legacy) GlassQuality.FULL else GlassQuality.LITE
+    }.getOrDefault(GlassQuality.FULL)
+
     @Synchronized
     internal fun glassQuality(): GlassQuality = runCatching {
         val saved = prefs?.getString(key(FLAG_WATER_DROP_GLASS, KEY_GLASS_QUALITY), null)

@@ -2,6 +2,7 @@ package com.glasssign.app.local
 
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import com.glasssign.app.ui.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -50,11 +51,25 @@ class NeutralThemeTest {
         assertEquals(Color.Black,appearanceScheme(default,true,null).background)
     }
 
-    @Test fun oledOnlyFlattensDarkCards() {
-        val normal=AppearanceSettings()
-        assertNotEquals(Color.Black,appearanceScheme(normal,true,null).surface)
-        assertEquals(Color.Black,appearanceScheme(normal.copy(pureBlack=true),true,null).surface)
-        assertEquals(appearanceScheme(normal,false,null).surface,
-            appearanceScheme(normal.copy(pureBlack=true),false,null).surface)
+    /** OLED 纯黑只压黑页面底层；卡片/框保留可区分的深灰（2026-11-07 产品决策）。 */
+    @Test fun oledOnlyBlackensThePageBackgroundAndKeepsFramesDistinct() {
+        val normal=appearanceScheme(AppearanceSettings(),true,null)
+        val oled=appearanceScheme(AppearanceSettings(pureBlack=true),true,null)
+        // 页面底层：深色默认就是纯黑，OLED 不改变它。
+        assertEquals(Color.Black,oled.background)
+        assertEquals(normal.background,oled.background)
+        // 卡片与容器：无论是否开启 OLED 都保留层级，且彼此不同。
+        for(c in listOf(normal,oled)) {
+            assertNotEquals(Color.Black,c.surface)
+            assertNotEquals(c.surface,c.surfaceContainerHigh)
+            assertNotEquals(c.surfaceContainerHigh,c.surfaceContainerHighest)
+        }
+        // 开启 OLED 不把卡片抹黑：与未开启时完全一致。
+        assertEquals(normal.surface.toArgb(),oled.surface.toArgb())
+        assertEquals(normal.surfaceContainerHigh.toArgb(),oled.surfaceContainerHigh.toArgb())
+        assertEquals(normal.surfaceContainerHighest.toArgb(),oled.surfaceContainerHighest.toArgb())
+        // 浅色主题完全不受影响。
+        assertEquals(appearanceScheme(AppearanceSettings(),false,null).surface.toArgb(),
+            appearanceScheme(AppearanceSettings(pureBlack=true),false,null).surface.toArgb())
     }
 }

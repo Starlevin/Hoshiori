@@ -28,6 +28,16 @@ class AppearanceMigrationTest {
         assertEquals("neutral",AppearanceController(context).read().colorStyle)
     }
 
+    /** P2: Enhanced glass is the fresh-install default; an explicit saved choice is never overwritten. */
+    @Test fun freshInstallUsesEnhancedSurfaceAndAnExplicitChoiceSurvives() {
+        assertEquals("ultra",AppearanceController(context).read().surfaceEffect)
+        assertEquals("ultra",AppearanceSettings().surfaceEffect)
+        for(effect in listOf("none","standard","ultra")) {
+            preferences().edit().clear().putString("surface_effect",effect).commit()
+            assertEquals(effect,AppearanceController(context).read().surfaceEffect)
+        }
+    }
+
     @Test fun oldDefaultBlueChangesOnlyTheDefaultStyle() {
         preferences().edit().putString("color_style","vivid").putInt("seed",0xFF4263C7.toInt())
             .putString("mode","dark").putBoolean("pure_black",true)

@@ -62,24 +62,30 @@ class ThemeContrastV070Test {
         assertEquals(144,checked)
     }
 
-    /** True OLED (frontend-miuix-preview): pureBlack makes background AND surface pure black, not grey. */
+    /** OLED (2026-11-07 产品决策): 只把页面底层压黑，卡片/容器仍带层级且文字可读。 */
     @Test fun pureBlackKeepsSecondaryTextReadableOnTheOledSurface() {
         for(style in styles) {
             val c=appearanceScheme(AppearanceSettings(seed=0xFF4263C7.toInt(),colorStyle=style,pureBlack=true),true,null)
-            assertEquals(Color.Black.toArgb(),c.surface.toArgb())
             assertEquals(Color.Black.toArgb(),c.background.toArgb())
+            assertNotEquals("卡片不能和页面底层一样黑",Color.Black.toArgb(),c.surface.toArgb())
+            assertNotEquals("卡片层级之间要有区分度",c.surface.toArgb(),c.surfaceContainerHigh.toArgb())
             assertTrue(contrast(c.onSurfaceVariant,c.surface)>=aa)
             assertTrue(contrast(c.onSurface,c.background)>=aa)
             assertTrue(contrast(c.error,c.surface)>=aa)
         }
     }
 
-    @Test fun oledContainersStayBlackAndSelectedTextRemainsReadableForExtremeSeeds() {
+    @Test fun oledContainersKeepDistinctLevelsAndSelectedTextRemainsReadableForExtremeSeeds() {
         for(seed in listOf(0xFF000000.toInt(),0xFFFFFFFF.toInt(),0xFF00FF00.toInt()))for(style in styles) {
             val c=appearanceScheme(AppearanceSettings(seed=seed,colorStyle=style,pureBlack=true),true,null)
-            for(surface in listOf(c.background,c.surface,c.surfaceVariant,c.primaryContainer,c.secondaryContainer,
-                c.surfaceContainerLowest,c.surfaceContainerLow,c.surfaceContainer,c.surfaceContainerHigh,c.surfaceContainerHighest))
-                assertEquals(Color.Black.toArgb(),surface.toArgb())
+            // 只有页面底层是纯黑；卡片、各层容器都不是纯黑，且彼此不同。
+            assertEquals(Color.Black.toArgb(),c.background.toArgb())
+            for(surface in listOf(c.surface,c.surfaceVariant,c.primaryContainer,c.secondaryContainer,
+                c.surfaceContainerLow,c.surfaceContainer,c.surfaceContainerHigh,c.surfaceContainerHighest)) {
+                assertNotEquals("卡片/容器不能整块黑掉",Color.Black.toArgb(),surface.toArgb())
+            }
+            assertNotEquals(c.surface.toArgb(),c.surfaceContainerHigh.toArgb())
+            assertNotEquals(c.surfaceContainerHigh.toArgb(),c.surfaceContainerHighest.toArgb())
             assertTrue(contrast(c.onPrimaryContainer,c.primaryContainer)>=aa)
             assertTrue(contrast(c.onSecondaryContainer,c.secondaryContainer)>=aa)
             assertTrue(contrast(c.primary,c.onPrimary)>=aa)

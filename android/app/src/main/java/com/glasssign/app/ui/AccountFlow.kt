@@ -52,9 +52,9 @@ internal fun safeLabel(value:String)=Regex("[0-9]{5,}").replace(value){maskedIde
                             Icon(meta.icon,null,tint=meta.color);Spacer(Modifier.width(16.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(meta.title,style=MaterialTheme.typography.titleMedium,maxLines=1,overflow=TextOverflow.Ellipsis)
-                                if(meta.id in pausedProviders)Text("平台已暂停，请先到实验室启用",style=MaterialTheme.typography.bodySmall,color=Muted)
+                                if(meta.id in pausedProviders)Text("平台已暂停，请到设置 → 插件中启用",style=MaterialTheme.typography.bodySmall,color=Muted)
                                 Text(providerGames[meta.id].orEmpty(),style=MaterialTheme.typography.bodySmall,color=Muted,maxLines=2,overflow=TextOverflow.Ellipsis)
-                                Text(if(meta.id=="tagged")"账号 / 短信登录" else if(LoginPlatforms.supportsLogin(meta.id))"官方网页登录 · 支持本人授权导入" else "仅支持本人授权导入",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.primary,maxLines=1,overflow=TextOverflow.Ellipsis)
+                                Text(if(meta.id=="lingqian")"本机离线模拟 · 需先在设置 → 插件安装领签" else if(meta.id=="tagged")"账号 / 短信登录" else if(LoginPlatforms.supportsLogin(meta.id))"官方网页登录 · 支持本人授权导入" else "仅支持本人授权导入",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.primary,maxLines=1,overflow=TextOverflow.Ellipsis)
                             }
                             Icon(Icons.Rounded.ChevronRight,null)
                         }
@@ -64,11 +64,19 @@ internal fun safeLabel(value:String)=Regex("[0-9]{5,}").replace(value){maskedIde
                 val id=provider!!;val meta=providerMeta(id)
                 Text(meta.title,style=MaterialTheme.typography.titleLarge,maxLines=1,overflow=TextOverflow.Ellipsis)
                 OutlinedTextField(alias,{alias=it.take(40)},label={Text("账号备注（例如主号 / 小号）")},singleLine=true,modifier=Modifier.fillMaxWidth())
-                Text(if(id=="tagged")"在星栞的账号表单登录；信息仅发送官方账号服务，密码与验证码不保存。" else "登录页使用独立的临时网页会话。请选择本次账号，原账号的已保存授权不会清除。",color=Muted)
-                Text("登录后将显示脱敏身份，再选择游戏与角色。授权成功不代表已经签到。",color=Muted)
-                if(id in pausedProviders)Text("平台已在实验室暂停，请启用后再登录。",style=MaterialTheme.typography.bodySmall,color=Muted)
+                if(id!="lingqian") {
+                    Text(if(id=="tagged")"在星栞的账号表单登录；信息仅发送官方账号服务，密码与验证码不保存。" else "登录页使用独立的临时网页会话。请选择本次账号，原账号的已保存授权不会清除。",color=Muted)
+                    Text("登录后将显示脱敏身份，再选择游戏与角色。授权成功不代表已经签到。",color=Muted)
+                }
+                if(id in pausedProviders)Text("平台已在设置 → 插件中暂停，请启用后再登录。",style=MaterialTheme.typography.bodySmall,color=Muted)
+                if(id=="lingqian") {
+                    // 插件平台：不需要网页登录，也不需要粘贴授权 JSON；只做本机离线模拟绑定。
+                    Text("这是本机离线模拟平台。星栞不读取领签的账号、令牌或数据库，也不会调用官方接口；签到只在本机执行，并写入一条明确标注「本地模拟」的记录。",color=Muted)
+                    Button(onClick={onImport(id,alias.ifBlank{meta.title},JSONObject())},enabled=!busy&&id !in pausedProviders,modifier=Modifier.fillMaxWidth().heightIn(min=50.dp).testTag("bind-lingqian")){Text("本地模拟绑定（不联网）")}
+                } else {
                 if(LoginPlatforms.supportsLogin(id))Button(onClick={onLogin(id,alias.ifBlank{meta.title})},enabled=!busy&&id !in pausedProviders,modifier=Modifier.fillMaxWidth().heightIn(min=50.dp).testTag("login-account")){Text("登录账号")}
                 TextButton(onClick={importing=true},enabled=!busy&&id !in pausedProviders,modifier=Modifier.heightIn(min=48.dp)){Text("使用本人授权导入")}
+                }
                 if(existing==null)TextButton(onClick={provider=null},modifier=Modifier.heightIn(min=48.dp)){Text("重新选择平台")}
             }
         }

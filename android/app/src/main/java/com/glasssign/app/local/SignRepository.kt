@@ -168,7 +168,9 @@ class SignRepository(private val owner:Context,private val databaseName:String="
     }
 
     fun add(provider:String,nickname:String,id:String=UUID.randomUUID().toString(),gameId:String="",gameIds:List<String> = if(gameId.isEmpty())emptyList() else listOf(gameId)):String {
-        require(provider in setOf("miyoushe","skland","tagged","kurobbs"))
+        require(provider in setOf("miyoushe","skland","tagged","kurobbs",LingqianPlugin.ID)) {
+            "未知平台：$provider"
+        }
         require(gameIds.all{GameCatalog.find(it)?.provider==provider}) { "游戏与平台不匹配" }
         writableDatabase.insertOrThrow("accounts",null,ContentValues().apply{put("id",id);put("provider",provider);put("nickname",nickname.take(40));put("enabled",1);put("created",now());put("game",gameIds.singleOrNull().orEmpty());put("games",gameIds.distinct().joinToString(","))});return id
     }
@@ -496,6 +498,10 @@ class SignRepository(private val owner:Context,private val databaseName:String="
         //  - a row that was already `accepted` stays `accepted` (it can never be promoted back to `success`).
         val status=when {
             source==SOURCE_ACCEPTED -> "accepted"
+            // 2026-11-08：插件平台「领签」是显式标注的本机离线模拟（来源 local_simulation，消息写明不代表官方），
+            // 它不是一次"未经确认的提交"，所以保留 success 让它显示为已完成；其它任何非官方 success 仍然降级为
+            // uncertain，诚实规则不变。
+            source==LingqianPlugin.SOURCE -> r.status
             r.status in setOf("success","already")&&!official -> "uncertain"
             r.status=="needs_action"&&r.message.isUnknownSubmissionWording -> "uncertain"
             else -> r.status

@@ -143,13 +143,15 @@ internal const val KIND_AUTH="auth"
 fun present(record:CheckRecord):RecordPresentation {
     val community=isCommunityTarget(record.targetId)
     val state=semanticState(record)
-    val label=labelFor(state,record,community)
+    // 2026-11-08：插件平台的本机离线模拟有独立措辞，避免把"模拟完成"读成官方签到成功。
+    val simulated=sourceOf(record)=="local_simulation"&&state==SignState.SUCCESS
+    val label=if(simulated) "本地模拟完成" else labelFor(state,record,community)
     val (sentence,isAuth)=sourceSentence(state,record,community)
     val group=if(state==SignState.AUTH_REQUIRED&&!community) "attention" else SignState.groupOf(state)
     return RecordPresentation(
         label=label,
         group=group,
-        source=sentence,
+        source=if(simulated) "本地模拟 · 未调用官方接口" else sentence,
         isAuthorizationIssue=isAuth||isNonSignTarget(record)||(record.resultMeta.isBlank&&hasAuthorizationSignal(record)),
         state=state,
         detail=technicalDetail(record),

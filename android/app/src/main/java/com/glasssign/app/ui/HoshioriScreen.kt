@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
@@ -20,6 +21,7 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.layout.layout
@@ -27,6 +29,7 @@ import androidx.compose.ui.platform.*
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
 import com.glasssign.app.*
@@ -428,16 +431,71 @@ internal fun ScopeSummary.gamesLine():String = gameIds.mapNotNull{GameCatalog.fi
     scope.record?.let{entry->val r=entry.record;val account=ui.byId[r.accountId];val row=remember(entry){rowOf(r)};AlertDialog(onDismissRequest={scope.record=null},title={Text(row.presentation.label)},text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(10.dp)){Text("${entry.day} · ${safeLabel(account?.nickname.orEmpty())}");Text(safeLabel(r.targetName));Text(row.presentation.source);Text(safeLabel(r.message));Text(recordDiagnostics(r),style=MaterialTheme.typography.bodySmall);Text("开始：${row.started}\n结束 / 最近状态：${row.updated}\n提交尝试：${r.attempts}")}},confirmButton={TextButton(onClick={scope.record=null}){Text("关闭")}},dismissButton={Column{if(account!=null&&entry.day==s.overview?.date)TextButton(onClick={vm.reconcile(account.id,r.targetId);scope.record=null}){Text("校验状态（不提交）")};if(account!=null)TextButton(onClick={scope.record=null;scope.tab=1;scope.detail=account.id}){Text("修复账号")};if(account!=null)TextButton(onClick={runCatching{context.startActivity(Intent(Intent.ACTION_VIEW,android.net.Uri.parse(com.glasssign.app.login.LoginPlatforms.of(account.provider).startUrl)))}}){Text("打开官方页面")}}})}
 }
 
+/**
+ * 「自动检测更新」开关（2026-11-08）。开启后冷启动静默检查；关闭后只保留手动检查。
+ * 偏好落在独立的 update_preferences_v1，不动账号、授权、记录或外观设置。
+ */
+@Composable private fun AutoUpdateSwitch() {
+    val context=LocalContext.current
+    val prefs=remember(context.applicationContext){com.glasssign.app.ui.update.UpdatePreferences(context.applicationContext)}
+    var checked by remember(prefs){mutableStateOf(prefs.enabled())}
+    QCard {
+        Row(verticalAlignment=Alignment.CenterVertically,modifier=Modifier.fillMaxWidth()) {
+            Column(Modifier.weight(1f)) {
+                Text("自动检测更新",style=MaterialTheme.typography.titleSmall)
+                Text("打开应用时在后台静默检查，发现新版本时弹窗提醒",style=MaterialTheme.typography.bodySmall,color=Muted)
+            }
+            Spacer(Modifier.width(12.dp))
+            Switch(checked=checked,onCheckedChange={value->prefs.setEnabled(value);checked=value})
+        }
+    }
+}
+
+/**
+ * 启动时发现新版本的弹窗（2026-11-08）：取代原来的首页内联卡片。
+ * 只在用户开启自动检测、且确实有未提示过的新版本时出现；「稍后」按版本去重。
+ */
 @Composable private fun StartupUpdateNotice(vm:UpdateViewModel,onView:()->Unit) {
     val state by vm.state.collectAsState()
     val candidate=state.candidate ?: return
     if(!state.meta.automatic||!state.meta.shouldNotify)return
-    Spacer(Modifier.height(16.dp))
-    QCard {
-        Text("发现新版本 ${candidate.version}",style=MaterialTheme.typography.titleSmall)
-        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick={vm.dismissNotification();onView()}){Text("查看更新")}
-            TextButton(onClick=vm::dismissNotification){Text("稍后")}
+    val colors=MaterialTheme.colorScheme
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest=vm::dismissNotification,
+        properties=androidx.compose.ui.window.DialogProperties(dismissOnBackPress=true,dismissOnClickOutside=true,usePlatformDefaultWidth=false),
+    ) {
+        Surface(Modifier.fillMaxWidth().padding(horizontal=24.dp),shape=RoundedCornerShape(28.dp),
+            color=colors.surface,tonalElevation=6.dp) {
+            Column(Modifier.padding(24.dp),horizontalAlignment=Alignment.CenterHorizontally) {
+                // 顶部图标圆盘：与品牌一致，不用外部图片资源。
+                Box(Modifier.size(64.dp).clip(CircleShape).background(colors.primaryContainer),contentAlignment=Alignment.Center) {
+                    Icon(Icons.Rounded.SystemUpdateAlt,null,tint=colors.onPrimaryContainer,modifier=Modifier.size(32.dp))
+                }
+                Spacer(Modifier.height(16.dp))
+                Text("发现新版本",style=MaterialTheme.typography.labelLarge,color=colors.primary)
+                Text("星栞 ${candidate.version}",style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Bold)
+                if(!candidate.name.isBlank()&&candidate.name!=candidate.version.toString()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(candidate.name,style=MaterialTheme.typography.bodyMedium,color=Muted)
+                }
+                val notes=candidate.notes?.trim().orEmpty()
+                if(notes.isNotBlank()) {
+                    Spacer(Modifier.height(16.dp))
+                    Surface(Modifier.fillMaxWidth(),shape=RoundedCornerShape(16.dp),color=colors.surfaceContainerHigh) {
+                        Text(notes.take(400),style=MaterialTheme.typography.bodySmall,color=colors.onSurface,
+                            modifier=Modifier.padding(14.dp))
+                    }
+                }
+                Spacer(Modifier.height(20.dp))
+                Button(onClick={vm.dismissNotification();onView()},modifier=Modifier.fillMaxWidth().heightIn(min=50.dp),
+                    shape=RoundedCornerShape(14.dp)) { Text("查看更新") }
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick=vm::dismissNotification,modifier=Modifier.fillMaxWidth().heightIn(min=48.dp)) {
+                    Text("稍后",color=Muted)
+                }
+                Text("仅从 GitHub 官方发布页检查，安装包会校验包名、版本与签名",
+                    style=MaterialTheme.typography.labelSmall,color=Muted,textAlign=TextAlign.Center)
+            }
         }
     }
 }
@@ -605,7 +663,7 @@ private fun LazyListScope.AccountDetailPage(scope:ScopeState,ui:PageUiState,a:Ac
     item(key="actions",contentType="actions"){QCard{
         QSwitch("启用此账号签到","关闭后手动与自动队列均跳过",a.enabled){vm.setEnabled(a.id,it)}
         QSwitch("参加每日自动签到","需开启全局计划；关闭后仍可手动签到",a.autoSignEnabled){vm.autoEnabled(a.id,it)}
-        if(a.provider in s.disabledProviders)Text("平台适配器已暂停，可在设置 → 实验室中恢复。",style=MaterialTheme.typography.bodySmall,color=Muted)
+        if(a.provider in s.disabledProviders)Text("平台适配器已暂停，可在设置 → 插件中恢复。",style=MaterialTheme.typography.bodySmall,color=Muted)
         OutlinedButton(onClick={vm.manageGames(a.id)},enabled=!s.loginBusy&&a.provider !in s.disabledProviders,modifier=Modifier.fillMaxWidth().heightIn(min=48.dp).testTag("manage-games")){Text("管理游戏与角色")}
         TextButton(onClick={vm.verifyAccount(a.id)},enabled=!s.loginBusy&&!s.jobRunning&&!s.submitting&&a.provider !in s.disabledProviders){Text("验证授权（不签到）")}
         val own=ui.feedback?.gameRows?.filter{it.accountId==a.id}.orEmpty().ifEmpty{null}
@@ -725,10 +783,13 @@ private fun LazyListScope.SettingsPage(ui:PageUiState,s:UiState,
             }}
         }
         SettingsSection.DIAGNOSTICS -> item(key="diagnostics",contentType="preference") {GroupedDiagnostics(s,onRefresh,onSettings)}
-        SettingsSection.LAB -> item(key="labs",contentType="labs") {
-            LabsPage(s,onRefresh,{onSettings("plugins")},{onSection(SettingsSection.DIAGNOSTICS)})
+        SettingsSection.PLUGINS -> item(key="plugins",contentType="plugins") {
+            PluginsPage(onRefresh={onRefresh()},onDiagnostics={onSection(SettingsSection.DIAGNOSTICS)})
         }
-        SettingsSection.UPDATES -> item(key="updates",contentType="updates") {com.glasssign.app.ui.update.HoshioriUpdateCard()}
+        SettingsSection.UPDATES -> item(key="updates",contentType="updates") {
+            AutoUpdateSwitch()
+            com.glasssign.app.ui.update.HoshioriUpdateCard()
+        }
         SettingsSection.PRIVACY -> {
             item(key="privacy-details",contentType="preference") {QCard {
                 Text("数据留在此设备",style=MaterialTheme.typography.titleMedium)

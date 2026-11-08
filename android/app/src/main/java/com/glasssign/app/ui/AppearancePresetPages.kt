@@ -431,7 +431,7 @@ private val PresetOptions = listOf(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun AppearancePresetsPage() {
+internal fun AppearancePresetsPage(onOpenColors: () -> Unit = {}) {
     val settings = LocalAppearance.current
     val controller = LocalAppearanceController.current
     fun update(next: AppearanceSettings) { controller?.save(next) }
@@ -508,6 +508,19 @@ internal fun AppearancePresetsPage() {
         }
         PresetNote("深蓝、柔紫是可选风格，随时可以点回经典黑白；换风格不会清除你的页面背景。")
 
+        // P2 §5: the color page (presets, recent colors, HEX/RGB, custom accent) is now one level down
+        // from the combined "主题与色彩" entry, instead of its own top-level row. Nothing is removed.
+        PresetGroup(title = "自定义色") {
+            Text(
+                "预设色、最近使用、HEX 与 RGB 输入，以及自选强调色。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(onClick = onOpenColors, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                Text("打开自定义色")
+            }
+        }
+
         // ---- 明暗模式 ----
         PresetGroup(title = "明暗模式") {
             Text(
@@ -526,16 +539,6 @@ internal fun AppearancePresetsPage() {
                     update(settings.copy(mode = value))
                 }
             }
-        }
-
-        // ---- OLED 纯黑 ----
-        PresetGroup(title = "屏幕") {
-            PresetSwitchRow(
-                title = "OLED 纯黑",
-                description = "仅深色模式生效：页面与卡片使用纯黑；自选图片背景仍按背景设置显示。",
-                checked = settings.pureBlack,
-                onChecked = { checked -> update(settings.copy(pureBlack = checked)) },
-            )
         }
 
         // ---- 底部说明 ----

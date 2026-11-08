@@ -34,26 +34,61 @@ class BackgroundPreferencesTest {
             assertEquals("unexpected source for '$value'", BackgroundSource.none, BackgroundPreferences.decode(value, null, null).source)
         }
         assertEquals(BackgroundSource.custom, BackgroundPreferences.decode("custom", null, null).source)
-        assertEquals(BackgroundSource.starfield, BackgroundPreferences.decode("starfield", null, null).source)
-        assertEquals(BackgroundSource.bundled, BackgroundPreferences.decode("bundled", null, null).source)
+        assertEquals(BackgroundSource.none, BackgroundPreferences.decode("starfield", null, null).source)
+        assertEquals(BackgroundSource.none, BackgroundPreferences.decode("bundled", null, null).source)
     }
 
     @Test fun enabledTracksTheSourceOnly() {
-        // The card-alpha consumer keys on this flag, so it must be false for every "no wallpaper" path and
-        // true for both wallpaper kinds, regardless of mask/blur.
+        // The card-alpha consumer keys on this flag, so it must be false for every "no wallpaper" path
+        // and true only when a custom photo is selected.
         assertFalse(BackgroundPreferences().enabled)
         assertFalse(BackgroundPreferences(maskStrength = .8f, blurDp = 20f).enabled)
         assertTrue(BackgroundPreferences(source = BackgroundSource.custom).enabled)
-        assertTrue(BackgroundPreferences(source = BackgroundSource.starfield).enabled)
-        assertTrue(BackgroundPreferences(source = BackgroundSource.starfield, maskStrength = 0f, blurDp = 0f).enabled)
     }
 
-    @Test fun starfieldIsAnOptionButNeverTheDefault() {
-        // Root agent ships the artwork, but the default must stay "no background" so an existing user's
-        // theme is not silently replaced by the bundled illustration.
-        assertEquals(BackgroundSource.none, BackgroundPreferences.decode(null, null, null).source)
-        assertEquals(BackgroundSource.starfield, BackgroundPreferences.decode("starfield", .22f, 0f).source)
-        assertEquals(.22f, BackgroundPreferences.decode("starfield", .22f, 0f).maskStrength, 0f)
+    @Test fun removedBundledBackgroundsMigrateToNoBackground() {
+        // Existing installs may still have the old bundled source saved. Removing that option must not
+        // leave an unsupported source selected or disturb custom photos.
+        assertEquals(BackgroundSource.none, BackgroundPreferences.decode("starfield", .22f, 0f).source)
+        assertEquals(BackgroundSource.none, BackgroundPreferences.decode("bundled", .22f, 0f).source)
+        assertEquals(BackgroundSource.custom, BackgroundPreferences.decode("custom", .22f, 0f).source)
+    }
+
+    @Test fun migrationKeepsTheUsersMaskAndBlurAndCustomPhoto() {
+        // A legacy "starfield" install may have tuned the sliders. The source must migrate to `none`
+        // while the two render values survive, so re-selecting a custom photo later keeps its look.
+        val migrated = BackgroundPreferences.decode("starfield", mask = .4f, blur = 12f)
+        assertEquals(BackgroundSource.none, migrated.source)
+        assertEquals(.4f, migrated.maskStrength, 0f)
+        assertEquals(12f, migrated.blurDp, 0f)
+        assertFalse(migrated.enabled)
+        val custom = BackgroundPreferences.decode("custom", mask = .6f, blur = 18f)
+        assertEquals(BackgroundSource.custom, custom.source)
+        assertEquals(.6f, custom.maskStrength, 0f)
+        assertEquals(18f, custom.blurDp, 0f)
+        assertTrue(custom.enabled)
+        assertEquals("custom", custom.source.name)
+    }
+
+    @Test fun onlyTheRemovedEnumValuesAreGone() {
+        // The enum is the persisted contract: any stored string other than "custom" is now `none`.
+        assertEquals(2, BackgroundSource.values().size)
+        assertEquals(setOf("none", "custom"), BackgroundSource.values().map { it.name }.toSet())
+    }
+
+    @Test fun oneDraftKeepsBothSliderValuesAcrossTwoGestures() {
+        // The dialog holds a single draft while a slider moves: dragging mask then blur must not reset
+        // the other value to the committed one. `copy` is the exact operation the sliders use.
+        val committed = BackgroundPreferences(source = BackgroundSource.custom, maskStrength = .22f, blurDp = 0f)
+        val afterMask = committed.copy(maskStrength = .5f)
+        val afterBlur = afterMask.copy(blurDp = 14f)
+        assertEquals(.5f, afterBlur.maskStrength, 0f)
+        assertEquals(14f, afterBlur.blurDp, 0f)
+        assertEquals(BackgroundSource.custom, afterBlur.source)
+        // The reverse order is equally safe.
+        val blurFirst = committed.copy(blurDp = 9f).copy(maskStrength = .7f)
+        assertEquals(9f, blurFirst.blurDp, 0f)
+        assertEquals(.7f, blurFirst.maskStrength, 0f)
     }
 
     @Test fun outOfRangeValuesAreClampedNotTrusted() {

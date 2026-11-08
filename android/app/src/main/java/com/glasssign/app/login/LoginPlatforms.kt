@@ -132,7 +132,14 @@ object LoginPlatforms {
 
     fun other(which: UserAgent): UserAgent = if (which == UserAgent.DESKTOP) UserAgent.MOBILE else UserAgent.DESKTOP
 
-    fun supportsLogin(id: String): Boolean = of(id).mode == LoginMode.WEB_SESSION
+    /**
+     * 只有真正登记过的网页登录平台才返回 true。
+     *
+     * 2026-11-08：插件平台（领签）只做本机离线模拟，没有网页登录；它也必须返回 false，否则会
+     * 误落到 [of] 的「第一个平台」兜底上，把用户带进别的平台的登录页。
+     */
+    fun supportsLogin(id: String): Boolean =
+        all.firstOrNull { it.id == id }?.let { it.mode == LoginMode.WEB_SESSION } ?: false
 
     /** True when [url] is an HTTPS address on the platform's official domain set. */
     fun allows(platform: LoginPlatform, url: String?): Boolean {

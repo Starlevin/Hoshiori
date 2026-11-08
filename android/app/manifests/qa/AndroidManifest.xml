@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug / glassQA 独立双水滴预览包专用清单片段。
+  只在 -PglassQa=true 的 debug 构建里参与合并；正式包 com.glasssign.app 完全看不到这些节点。
+  目标：桌面只有一个图标，点开即进入 GlassPrototypeActivity（Playground），无需 adb am start。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application>
+        <!-- 独立预览入口：自己的图标、自己的标签、自己的 MAIN/LAUNCHER 过滤器。 -->
+        <activity
+            android:name="com.glasssign.app.ui.GlassPrototypeActivity"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_droplet"
+            android:roundIcon="@mipmap/ic_launcher_droplet"
+            android:label="星栞 · 双水滴预览"
+            android:theme="@style/Theme.GlassSign">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          仅在本预览包内彻底移除正式 MainActivity 的三个桌面图标，保证桌面只有一个入口且直达 Demo。
+          用 tools:node="remove"（而不是 enabled=false）：设备上残留的「动态启用 alias」状态属于
+          PackageManager 的持久设置，enabled=false 的清单声明盖不过它；组件根本不存在才不会被
+          旧状态重新点亮。main 源集与正式发布包的清单完全不受影响（其单测只读 src/main）。
+        -->
+        <activity-alias
+            android:name="com.glasssign.app.LauncherSystem"
+            tools:node="remove" />
+        <activity-alias
+            android:name="com.glasssign.app.LauncherDark"
+            tools:node="remove" />
+        <activity-alias
+            android:name="com.glasssign.app.LauncherLight"
+            tools:node="remove" />
+    </application>
+
+</manifest>

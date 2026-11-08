@@ -10,9 +10,22 @@
          apps" in system settings, and the install itself is confirmed on the system page. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
-    <!-- Package visibility (API 30+): the plugin page may only look up this one independent app. -->
+    <!-- Package visibility (API 30+). Only what the app actually starts:
+         - 领签 is the one independent app the plugin page looks up / opens;
+         - ACTION_VIEW over https (source page) and market (store search) must be declared, or the
+           system hides every browser/store on Android 11+ and "在浏览器打开来源页" silently fails.
+         No QUERY_ALL_PACKAGES: visibility stays limited to these intents. -->
     <queries>
         <package android:name="com.qinghan.aicheckin" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="market" />
+        </intent>
     </queries>
 
     <!-- allowBackup=false: the encrypted API key must not sync to cloud backups. -->

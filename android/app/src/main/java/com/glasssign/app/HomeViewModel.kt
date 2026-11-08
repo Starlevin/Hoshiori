@@ -129,7 +129,7 @@ class HomeViewModel(application:Application):AndroidViewModel(application) {
         }
         val selected=state.overview?.accounts.orEmpty().filter{accountIds==null||it.id in accountIds}
         if(selected.isNotEmpty()&&selected.none{local.registry.isExecutionAllowed(it.provider)}) {
-            state=state.copy(message=Message("所选平台适配器已暂停，请在设置 → 实验室中启用"));return
+            state=state.copy(message=Message("所选平台适配器已暂停，请在设置 → 插件中启用"));return
         }
         state=state.copy(submitting=true,fix=null)
         action {

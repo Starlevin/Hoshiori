@@ -2,7 +2,6 @@ package com.glasssign.app.ui.background
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -27,50 +26,13 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.glasssign.app.R
 import com.glasssign.app.ui.LocalBackgroundPreferences
 import com.glasssign.app.ui.LocalBackgroundRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
 
-/**
- * Bundled wallpaper hook: the app owner supplies the original artwork as a drawable and sets the id once
- * (default 0 = not shipped yet), so this module never hard-codes a resource that does not exist.
- */
-object BundledBackgrounds {
-    /** Original artwork shipped in `res/drawable-nodpi` by the app owner. */
-    var starfieldRes: Int = R.drawable.hoshiori_starfield_v076
 
-    /**
-     * Reads the bundled copy at a bounded size, always off the main thread.
-     *
-     * Bounds come from a decode-free `inJustDecodeBounds` pass, then the planner picks the sample size, so a
-     * later high-resolution artwork is sampled down instead of being fully inflated first. The resized copy
-     * is returned; the intermediate is released immediately (GDX has no reference to it).
-     */
-    internal suspend fun load(context: Context, width: Int, height: Int): Bitmap? = withContext(Dispatchers.IO) {
-        if (starfieldRes == 0) return@withContext null
-        runCatching {
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeResource(context.resources, starfieldRes, bounds)
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
-            val plan = planDecode(ImageInfo(bounds.outWidth, bounds.outHeight), 0, width, height)
-                .getOrNull() ?: return@runCatching null
-            val options = BitmapFactory.Options().apply {
-                inSampleSize = plan.inSampleSize
-                inPreferredConfig = Bitmap.Config.RGB_565
-            }
-            val sampled = BitmapFactory.decodeResource(context.resources, starfieldRes, options)
-                ?: return@runCatching null
-            if (sampled.width == plan.scaledWidth && sampled.height == plan.scaledHeight) {
-                sampled
-            } else {
-                Bitmap.createScaledBitmap(sampled, plan.scaledWidth, plan.scaledHeight, true)
-            }
-        }.getOrNull()
-    }
-}
 
 /**
  * Page background for HoshioriScreen: replaces the `PageGradient` brush line, nothing else changes.
@@ -82,8 +44,8 @@ object BundledBackgrounds {
  *
  * Decode is keyed on the source, the stored file stamp and the measured pixel size. Mask/blur never re-enter
  * the effect, so dragging a slider recomposes the draw lambda without touching disk or the decoder, and a
- * recompose without those keys reuses the same bitmap instead of decoding again. Custom (picked) and bundled
- * (starfield) images go through the same bounded planner.
+ * recompose without those keys reuses the same bitmap instead of decoding again. Custom images go through
+ * the bounded planner.
  */
 @Composable
 fun HoshioriBackground(modifier: Modifier = Modifier) {
@@ -117,7 +79,6 @@ fun HoshioriBackground(modifier: Modifier = Modifier) {
                 if (repository == null || customFile == null) return@LaunchedEffect
                 runCatching { repository.load(preferences, targetWidth, targetHeight) }.onSuccess { loaded = it?.bitmap }
             }
-            else -> loaded = BundledBackgrounds.load(context, targetWidth, targetHeight)
         }
     }
 
@@ -140,7 +101,7 @@ fun HoshioriBackground(modifier: Modifier = Modifier) {
             // status/navigation bars.
             if (mask > 0f) Box(Modifier.fillMaxSize().background(page.copy(alpha = mask)))
         } else {
-            // No wallpaper, still decoding, or a bundled id that is not shipped: identical to 0.7.5.
+            // No wallpaper or the selected photo is still decoding: identical to the default page background.
             Box(Modifier.fillMaxSize().background(pageGradientBrush()))
         }
     }
@@ -159,9 +120,8 @@ internal fun pageGradientBrush(): Brush {
     val colors = MaterialTheme.colorScheme
     val flat = com.glasssign.app.ui.LocalAppearance.current.colorStyle == "neutral" || colors.background == Color.Black
     return remember(colors.primaryContainer, colors.background, colors.secondaryContainer,flat) {
-        // True OLED: a pure-black background means a flat black page, not a tinted
-        // gradient. The scheme already makes the containers black in that case, so
-        // this is a belt-and-braces flatten, not a second source of truth.
+        // OLED 纯黑：页面底层保持纯黑（scheme.background=Color.Black），卡片与容器仍带深灰层级，
+        // 所以这里只把"页面"这一层摊平，不再是"整屏全黑"的第二来源。
         if (flat) Brush.linearGradient(listOf(colors.background, colors.background))
         else Brush.linearGradient(
             listOf(colors.primaryContainer.copy(alpha = .38f), colors.background, colors.secondaryContainer.copy(alpha = .18f))

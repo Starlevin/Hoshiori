@@ -1,4 +1,4 @@
-﻿package com.glasssign.app.ui.update
+package com.glasssign.app.ui.update
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
@@ -184,6 +184,8 @@ class UpdateViewModel(
     private val downloaderFactory: (UpdateCandidate) -> UpdateDownloader? = { null },
     private val apkReader: UpdateApkReader? = null,
     private val installerBridge: UpdateInstallerBridge? = null,
+    /** 用户「自动检测更新」开关。默认 true，测试无需关心；生产由 [UpdatePreferences] 提供。 */
+    private val autoCheckEnabled: () -> Boolean = { true },
 ) : ViewModel() {
 
     /** 协程作用域。生产用 [viewModelScope]；测试可以换成真实线程池上的作用域。 */
@@ -222,6 +224,8 @@ class UpdateViewModel(
     fun autoCheck(): Boolean {
         val current = _state.value
         if (current.autoCheckAttempted || current.busy || downloadJob?.isActive == true) return false
+        // 用户关闭「自动检测更新」：冷启动不静默检查，也不占用限频窗口；手动 check() 仍可用。
+        if (!runCatching { autoCheckEnabled() }.getOrDefault(true)) return false
         _state.update { it.copy(autoCheckAttempted = true) }
         val channel = current.releaseChannel ?: return false
         val memory = runCatching { checkStore.read() }.getOrDefault(UpdateCheckMemory())
@@ -581,6 +585,7 @@ class UpdateViewModel(
                 isDebug = com.glasssign.app.BuildConfig.DEBUG,
             )
             val store = SharedPrefsUpdateCheckStore(app)
+            val preferences = UpdatePreferences(app)
             val channel = build.channel ?: UpdateReleaseChannel.OFFICIAL
             return UpdateViewModel(
                 build = build,
@@ -624,6 +629,7 @@ class UpdateViewModel(
                 },
                 apkReader = reader,
                 installerBridge = installerBridge,
+                autoCheckEnabled = { preferences.enabled() },
             )
         }
     }

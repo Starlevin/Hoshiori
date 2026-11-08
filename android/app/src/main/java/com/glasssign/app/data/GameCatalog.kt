@@ -17,6 +17,8 @@ object GameCatalog {
         GameChoice("nte","异环","tagged","1289"),
         GameChoice("wuwa","鸣潮","kurobbs","3"),
         GameChoice("pgr","战双帕弥什","kurobbs","2"),
+        // 2026-11-08：插件平台。需先在「设置 → 插件」安装并验签领签，签到在星栞本机离线模拟执行。
+        GameChoice("lingqian_tasks","领签任务","lingqian","daily"),
     )
     fun find(id:String):GameChoice?=all.firstOrNull{it.id==id}
     fun firstFor(provider:String):GameChoice=all.first{it.provider==provider}
@@ -30,6 +32,8 @@ object GameCatalog {
     }
     fun gameForTarget(provider:String,target:String):String? {
         val parts=target.split('|')
+        // 插件平台只有一个模拟任务，target 形如 `task|daily`。
+        if(provider=="lingqian")return find("lingqian_tasks")?.takeIf{it.provider==provider}?.id
         return when(provider) {
             "miyoushe","skland" -> find(parts.first())?.takeIf{it.provider==provider}?.id
             "tagged","kurobbs" -> if(parts.size>=3&&parts[0]=="game")all.firstOrNull{it.provider==provider&&it.protocolId==parts[1]}?.id else null

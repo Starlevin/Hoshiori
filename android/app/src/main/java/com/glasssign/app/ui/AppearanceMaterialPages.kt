@@ -1,12 +1,10 @@
 package com.glasssign.app.ui
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -19,7 +17,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
 /**
- * Material sub-pages of the appearance dialog: glass/motion, page background, typography.
+ * Material sub-pages of the appearance dialog: page background, typography.
+ *
+ * 2026-11-07 产品决策：删除「显示与辅助」里的辅助与动效 / 卡片层次整块（默认视觉即增强），
+ * 删除液态玻璃调节入口，页面背景一级入口也删除（遮罩未做好）；底层偏好字段与背景渲染代码保留，
+ * 不改动既有用户数据与默认视觉。
  *
  * Each page is a pure composition root — it reads [LocalAppearance] and writes through
  * [LocalAppearanceController], never through its own ViewModel or preference file. Pages draw no top bar
@@ -27,96 +29,18 @@ import androidx.compose.ui.unit.dp
  * [AppearanceSubScaffold].
  */
 
-/** Glass material, surface depth, navigation tint and the motion notice. */
-@Composable
-internal fun AppearanceGlassPage() {
-    val settings = LocalAppearance.current
-    val controller = LocalAppearanceController.current
-    fun update(next: AppearanceSettings) { controller?.save(next) }
-
-    AppearanceSubScaffold(
-        title = "玻璃与动效",
-        subtitle = "调整界面对比度、表面层次和动画。",
-    ) {
-        PreferenceGroup("玻璃材质") {
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                SettingToggleRow(
-                    title = "减少透明效果",
-                    description = "使用不透明的导航底色",
-                    checked = settings.glassMode == "off",
-                    onChecked = { update(settings.copy(glassMode = if (it) "off" else "standard")) },
-                )
-                GlassHint("在设置的实验室中选择 Liquid Glass 2.0 的完整、轻量或关闭模式。")
-            }
-        }
-        PreferenceGroup("表面层次") {
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                ChoiceChips(
-                    options = listOf("none" to "简洁", "standard" to "标准", "ultra" to "增强"),
-                    selected = settings.surfaceEffect,
-                ) { update(settings.copy(surfaceEffect = it)) }
-                GlassHint("只改变卡片表面、边框与高光的层次，不启用实时模糊。")
-            }
-        }
-        PreferenceGroup("导航") {
-            SettingToggleRow(
-                title = "导航色彩融合",
-                description = "底部导航使用淡主题色背景",
-                checked = settings.navigationTint,
-            ) { update(settings.copy(navigationTint = it)) }
-        }
-        PreferenceGroup("动效") {
-            /*
-             * The switch is bound to the two CompositionLocals, never to a local ViewModel:
-             *  - `LocalReduceMotion` is the committed value (it also folds in the system "remove
-             *    animations" developer/accessibility setting, so what the user sees here is what the
-             *    dock and the glass effects actually use);
-             *  - `LocalReduceMotionAction` is the nullable setter the owner of that preference supplies.
-             *    It is null outside the screen that hosts the appearance dialog (previews, tests), and
-             *    in that case the row is shown disabled instead of pretending to be interactive.
-             */
-            val reduceMotion = LocalReduceMotion.current
-            val setReduceMotion = LocalReduceMotionAction.current
-            SettingToggleRow(
-                title = "减少动态效果",
-                description = if (setReduceMotion == null) {
-                    "需要在设置里打开外观才能调整"
-                } else {
-                    "关闭弹性、缩放与过渡动画，保留必要的内容变化"
-                },
-                checked = reduceMotion,
-                onChecked = { value -> setReduceMotion?.invoke(value) },
-                enabled = setReduceMotion != null,
-            )
-            GlassHint(
-                "开启后底部导航与卡片不再有弹性位移和缩放过渡，只保留直接的内容切换；" +
-                    "系统关闭动画时同样生效。",
-            )
-        }
-        GlassHint("以上设置只保存在本机，重启后保持。")
-    }
-}
-
 /**
- * Page background. All picking, previewing, masking and blurring is [BackgroundSettingsSection] — this page
- * only frames it and adds the two privacy notes, so no launcher and no repository access lives here.
+ * Page background. The two choice cards, the current-photo preview and the mask/blur controls all live in
+ * [BackgroundSettingsSection]; this page only supplies the one-line subtitle and leaves the title to the
+ * host's fixed top bar, so the heading is not repeated and the privacy note is not duplicated.
  */
 @Composable
 internal fun AppearanceBackgroundPage() {
     AppearanceSubScaffold(
         title = "页面背景",
-        subtitle = "只影响页面装饰，不会清除或修改你已保存的账号。",
+        subtitle = "选择纯净背景，或用自己的图片装饰页面。",
     ) {
-        Surface(
-            Modifier.fillMaxWidth(),
-            shape = GlassShape,
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .5f)),
-        ) {
-            Column(Modifier.padding(16.dp)) { BackgroundSettingsSection() }
-        }
-        GlassHint("图片用系统照片选择器读取，不需要存储权限；文件只保存在本应用私有目录，不上传。")
-        GlassHint("换主题色或切换风格都不会清除这张背景图。")
+        BackgroundSettingsSection()
     }
 }
 

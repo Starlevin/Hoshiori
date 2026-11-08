@@ -99,7 +99,7 @@ class BackgroundRepository(
         }
     }
 
-    /** Returns to "no background" and deletes the private copy; the bundled image is never deleted. */
+    /** Returns to "no background" and deletes the private copy of the selected photo. */
     suspend fun clear(preferences: BackgroundPreferences): BackgroundPreferences = withContext(ioDispatcher) {
         mutex.withLock {
             dropLoaded()
